@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgres:16
+    container_name: safe-evidence-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: safe_evidence
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      # Guarda os dados entre reinícios do container
+      - safe_evidence_pgdata:/var/lib/postgresql/data
+      # Rodado automaticamente pela imagem oficial do Postgres SÓ na
+      # primeira vez que o volume é criado (cria o schema sozinho)
+      - ./src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      # Migrações posteriores ao schema.sql (também só na primeira criação)
+      - ./src/db/migrations/003_autenticacao.sql:/docker-entrypoint-initdb.d/03-autenticacao.sql
+
+volumes:
+  safe_evidence_pgdata:
