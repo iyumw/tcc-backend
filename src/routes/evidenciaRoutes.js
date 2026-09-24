@@ -1,0 +1,21 @@
+const express = require('express');
+const evidenciaController = require('../controllers/evidenciaController');
+const autenticar = require('../middleware/autenticar');
+
+const router = express.Router();
+
+// O SSE usa token via querystring; o restante da API usa Bearer.
+router.get('/eventos', autenticar.comQuery, evidenciaController.eventosSse);
+
+router.get('/:id/arquivo', evidenciaController.servirArquivoLocal);
+
+router.use(autenticar);
+router.get('/', evidenciaController.listar);
+router.get('/:id', evidenciaController.detalhar);
+router.get('/:id/url', evidenciaController.gerarUrl);
+router.get('/:id/integridade', evidenciaController.verificarIntegridade);
+router.get('/:id/laudo', evidenciaController.baixarLaudo);
+router.post('/:id/analise', evidenciaController.reprocessar);
+router.delete('/:id', evidenciaController.excluir);
+
+module.exports = router;
