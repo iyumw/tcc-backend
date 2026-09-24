@@ -1,0 +1,739 @@
+{
+  "info": {
+    "_postman_id": "9dcbbcd1-1794-4f57-9789-795e27d6dd49",
+    "name": "Safe Evidence — Backend",
+    "description": "Testes do backend sem o front.\n\nAntes: backend rodando (npm run dev), migrações aplicadas, JWT_SECRET no .env.\n\nOrdem: 1. Cadastro → 2. Login → (copie o código do terminal do backend para a variável 'codigo') → 3. Confirmar código. O token fica salvo sozinho e vale para o resto.\n\nVariáveis: aba 'Variables' da coleção.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8080/api"
+    },
+    {
+      "key": "email",
+      "value": "maria@teste.com"
+    },
+    {
+      "key": "senha",
+      "value": "Senha@123"
+    },
+    {
+      "key": "codigo",
+      "value": "COLE_O_CODIGO_DO_TERMINAL"
+    },
+    {
+      "key": "mfa_token",
+      "value": ""
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "id_gravacao",
+      "value": "1"
+    },
+    {
+      "key": "id_dispositivo",
+      "value": "esp32cam-01"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Conta e login",
+      "description": "Rode 1 → 2 → (copie o código) → 3.",
+      "item": [
+        {
+          "name": "1. Cadastro",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/cadastro",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "cadastro"
+              ]
+            },
+            "description": "RE05 / CT10. Esperado: 201. Rodar de novo: 409 (e-mail/CPF já cadastrado).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome\": \"Maria Teste\",\n  \"cpf\": \"529.982.247-25\",\n  \"email\": \"{{email}}\",\n  \"telefone\": \"(11) 98888-7777\",\n  \"senha\": \"{{senha}}\",\n  \"endereco\": {\n    \"cep\": \"01310-100\",\n    \"logradouro\": \"Av. Paulista\",\n    \"numero\": \"1000\",\n    \"complemento\": \"ap 12\",\n    \"bairro\": \"Bela Vista\",\n    \"cidade\": \"São Paulo\",\n    \"uf\": \"SP\"\n  },\n  \"consentimento\": true\n}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "2. Login (envia o código)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "RE06. Esperado: 200 com mfa_token. O código de 6 dígitos aparece no terminal do backend: [MFA] Código login para ...: 123456 → cole na variável 'codigo'.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"senha\": \"{{senha}}\"\n}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "if (r.mfa_token) {",
+                  "  pm.collectionVariables.set('mfa_token', r.mfa_token);",
+                  "  console.log('mfa_token salvo. Pegue o código de 6 dígitos no terminal do backend e cole na variável \"codigo\".');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Confirmar código (MFA)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/mfa",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "mfa"
+              ]
+            },
+            "description": "Esperado: 200 com token (salvo automaticamente). Código errado: 401 MFA_INVALIDO.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mfa_token\": \"{{mfa_token}}\",\n  \"codigo\": \"{{codigo}}\"\n}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "if (r.token) {",
+                  "  pm.collectionVariables.set('token', r.token);",
+                  "  console.log('token salvo: as próximas requisições já vão autenticadas.');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reenviar código",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/mfa/reenviar",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "mfa",
+                "reenviar"
+              ]
+            },
+            "description": "Gera um código novo (aparece no terminal) e um mfa_token novo (salvo automaticamente).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mfa_token\": \"{{mfa_token}}\"\n}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "if (r.mfa_token) {",
+                  "  pm.collectionVariables.set('mfa_token', r.mfa_token);",
+                  "  console.log('mfa_token salvo. Pegue o código de 6 dígitos no terminal do backend e cole na variável \"codigo\".');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/auth/logout",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "Esperado: 204. Depois disso, qualquer rota com o mesmo token dá 401 SESSAO_ENCERRADA (CT09)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Perfil",
+      "description": "",
+      "item": [
+        {
+          "name": "Ver perfil",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/perfil",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "perfil"
+              ]
+            },
+            "description": "Esperado: 200."
+          }
+        },
+        {
+          "name": "Vincular dispositivo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/perfil/dispositivo",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "perfil",
+                "dispositivo"
+              ]
+            },
+            "description": "Vincula a ESP32-CAM à conta. Se der 404, o dispositivo está preso a outra vítima: UPDATE dispositivo SET id_vitima = NULL WHERE id_dispositivo = 'esp32cam-01';",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id_dispositivo\": \"{{id_dispositivo}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Alterar nome e endereço (sem código)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/perfil",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "perfil"
+              ]
+            },
+            "description": "Esperado: 200.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome\": \"Maria T. Silva\",\n  \"endereco\": {\n    \"numero\": \"2000\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Pedir código para alterar dados",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/perfil/codigo",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "perfil",
+                "codigo"
+              ]
+            },
+            "description": "RE10. O código aparece no terminal → cole na variável 'codigo'.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"finalidade\": \"alterar_dados\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Alterar telefone (com código)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/perfil",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "perfil"
+              ]
+            },
+            "description": "Sem código válido: 401 MFA_OBRIGATORIO.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"telefone\": \"(11) 97777-6666\",\n  \"codigo\": \"{{codigo}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Pedir código para excluir conta",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/perfil/codigo",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "perfil",
+                "codigo"
+              ]
+            },
+            "description": "RE12. O código aparece no terminal → cole na variável 'codigo'.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"finalidade\": \"excluir_conta\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Excluir conta (irreversível)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/perfil",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "perfil"
+              ]
+            },
+            "description": "Esperado: 204. Apaga a conta e as gravações dela; o dispositivo só é desvinculado.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"codigo\": \"{{codigo}}\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Evidências",
+      "description": "Precisa de pelo menos uma gravação feita pelo relógio/câmera com o dispositivo já vinculado à conta.",
+      "item": [
+        {
+          "name": "Listar",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/evidencias",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "evidencias"
+              ]
+            },
+            "description": "Figura 14. Salva o id da gravação mais recente na variável id_gravacao."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const lista = pm.response.json();",
+                  "if (Array.isArray(lista) && lista.length) {",
+                  "  pm.collectionVariables.set('id_gravacao', lista[0].id_gravacao);",
+                  "  console.log('id_gravacao = ' + lista[0].id_gravacao);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Detalhe + laudo",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/evidencias/{{id_gravacao}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "evidencias",
+                "{{id_gravacao}}"
+              ]
+            },
+            "description": "Figura 15. Gravação de outra conta: 403 (CT05)."
+          }
+        },
+        {
+          "name": "Link do vídeo (15 min)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/evidencias/{{id_gravacao}}/url",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "evidencias",
+                "{{id_gravacao}}",
+                "url"
+              ]
+            },
+            "description": "RN04 / CT06. Abra o 'url' da resposta no navegador para ver o vídeo."
+          }
+        },
+        {
+          "name": "Verificar integridade",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/evidencias/{{id_gravacao}}/integridade",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "evidencias",
+                "{{id_gravacao}}",
+                "integridade"
+              ]
+            },
+            "description": "RN05 / CT04. 200 = íntegro; 409 = arquivo alterado."
+          }
+        },
+        {
+          "name": "Baixar laudo",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/evidencias/{{id_gravacao}}/laudo",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "evidencias",
+                "{{id_gravacao}}",
+                "laudo"
+              ]
+            },
+            "description": "RE04. Use 'Send and Download'. 409 se a análise ainda não terminou."
+          }
+        },
+        {
+          "name": "Pedir nova análise",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/evidencias/{{id_gravacao}}/analise",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "evidencias",
+                "{{id_gravacao}}",
+                "analise"
+              ]
+            },
+            "description": "RE08. Só quando o status é Erro (ou Pendente)."
+          }
+        },
+        {
+          "name": "Excluir (com confirmação)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/evidencias/{{id_gravacao}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "evidencias",
+                "{{id_gravacao}}"
+              ]
+            },
+            "description": "RE09 / CT11. Sem { confirmacao: true }: 400. Com processo judicial: 409.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"confirmacao\": true\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Recuperar senha",
+      "description": "",
+      "item": [
+        {
+          "name": "Esqueci a senha",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/senha/esqueci",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "senha",
+                "esqueci"
+              ]
+            },
+            "description": "RE07. O código aparece no terminal → cole na variável 'codigo'.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\"\n}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Redefinir senha",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/senha/redefinir",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "senha",
+                "redefinir"
+              ]
+            },
+            "description": "Depois, atualize a variável 'senha' para NovaSenha#9.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"codigo\": \"{{codigo}}\",\n  \"nova_senha\": \"NovaSenha#9\"\n}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Casos de erro",
+      "description": "",
+      "item": [
+        {
+          "name": "Cadastro inválido",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/cadastro",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "cadastro"
+              ]
+            },
+            "description": "Esperado: 400 com 'campos' dizendo o erro de cada campo (CPF inválido, senha fraca...).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome\": \"A\",\n  \"cpf\": \"000.000.000-00\",\n  \"email\": \"x\",\n  \"telefone\": \"1\",\n  \"senha\": \"abc\",\n  \"endereco\": {},\n  \"consentimento\": false\n}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Login com senha errada",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "RN10 / CT07. 3x seguidas → 423 BLOQUEIO_TEMPORARIO (30 min). Para destravar no teste: UPDATE vitima SET bloqueada_ate = NULL, ja_foi_bloqueada = FALSE, bloqueio_permanente = FALSE, falhas_login = 0;",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"senha\": \"Errada@123\"\n}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Rota protegida sem token",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/perfil",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "perfil"
+              ]
+            },
+            "description": "Esperado: 401 SEM_TOKEN.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
