@@ -130,8 +130,8 @@ que precisa já existir na tabela `dispositivo`).
 ```
 
 ### `POST /api/captura/sessao/encerrar`
-Chamado quando a gravação termina (ver nota abaixo sobre o firmware da
-Amanda). Junta todos os frames recebidos daquela sessão num único
+Chamado pela ESP32-CAM quando recebe o comando STOP do relógio. 
+Junta todos os frames recebidos daquela sessão num único
 `.mp4` (via ffmpeg), calcula o hash SHA-256 do vídeo final (RN05) e
 grava tudo na tabela `gravacao`. Depois de montar o vídeo, os frames
 individuais são apagados.
@@ -149,12 +149,6 @@ individuais são apagados.
   "hash_seguranca": "64889dbf..."
 }
 ```
-
-> ⚠️ **Mudança necessária no firmware da Amanda:** o código atual dela
-> nunca avisa o backend quando a gravação termina — ele só para de
-> mandar frames. É preciso adicionar UMA chamada HTTP no callback do
-> comando BLE STOP. Ver `docs/mudanca-firmware-amanda.md` pro trecho
-> de código pronto pra colar.
 
 **Erros possíveis (upload e encerrar):**
 - `400` — campo obrigatório ausente, ou nenhum frame recebido pra sessão
