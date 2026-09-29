@@ -159,36 +159,36 @@ async function encerrarTodasSessoes(idVitima, excetoIdSessao = null) {
   );
 }
 
-function hashCodigo(idDesafio, codigo) {
-  return crypto.createHash('sha256').update(`${idDesafio}:${codigo}`).digest('hex');
+function hashCodigo(idCodigo, codigo) {
+  return crypto.createHash('sha256').update(`${idCodigo}:${codigo}`).digest('hex');
 }
 
-async function criarDesafio(idVitima, finalidade) {
+async function criarCodigo(idVitima, finalidade) {
   await db.query(
-    `UPDATE desafio_mfa SET usado_em = NOW()
+    `UPDATE codigo_mfa SET usado_em = NOW()
       WHERE id_vitima = $1 AND finalidade = $2 AND usado_em IS NULL`,
     [idVitima, finalidade]
   );
   const codigo = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
-  const idDesafio = crypto.randomUUID();
+  const idCodigo = crypto.randomUUID();
   await db.query(
-    `INSERT INTO desafio_mfa (id_desafio, id_vitima, finalidade, codigo_hash, expira_em)
+    `INSERT INTO codigo_mfa (id_codigo, id_vitima, finalidade, codigo_hash, expira_em)
      VALUES ($1, $2, $3, $4, NOW() + ($5 * INTERVAL '1 minute'))`,
-    [idDesafio, idVitima, finalidade, hashCodigo(idDesafio, codigo), MFA_VALIDADE_MIN]
+    [idCodigo, idVitima, finalidade, hashCodigo(idCodigo, codigo), MFA_VALIDADE_MIN]
   );
-  return { idDesafio, codigo, validadeMinutos: MFA_VALIDADE_MIN };
+  return { idCodigo, codigo, validadeMinutos: MFA_VALIDADE_MIN };
 }
 
-async function conferirCodigo({ idDesafio = null, idVitima = null, finalidade, codigo }) {
+async function conferirCodigo({ idCodigo = null, idVitima = null, finalidade, codigo }) {
   const { rows } = await db.query(
-    `SELECT id_desafio, id_vitima, tentativas, usado_em, expira_em < NOW() AS expirado
-       FROM desafio_mfa
+    `SELECT id_codigo, id_vitima, tentativas, usado_em, expira_em < NOW() AS expirado
+       FROM codigo_mfa
       WHERE finalidade = $1
-        AND ($2::uuid IS NULL OR id_desafio = $2::uuid)
+        AND ($2::uuid IS NULL OR id_codigo = $2::uuid)
         AND ($3::int IS NULL OR id_vitima = $3::int)
       ORDER BY criado_em DESC
       LIMIT 1`,
-    [finalidade, idDesafio, idVitima]
+    [finalidade, idCodigo, idVitima]
   );
   const d = rows[0];
   if (!d || d.usado_em) return { ok: false, erro: 'Código inválido. Peça um novo código.' };
@@ -197,17 +197,17 @@ async function conferirCodigo({ idDesafio = null, idVitima = null, finalidade, c
     return { ok: false, erro: 'Muitas tentativas. Peça um novo código.' };
   }
 
-  const recebido = Buffer.from(hashCodigo(d.id_desafio, String(codigo || '').trim()));
+  const recebido = Buffer.from(hashCodigo(d.id_codigo, String(codigo || '').trim()));
   const esperado = Buffer.from(
-    (await db.query('SELECT codigo_hash FROM desafio_mfa WHERE id_desafio = $1', [d.id_desafio])).rows[0].codigo_hash
+    (await db.query('SELECT codigo_hash FROM codigo_mfa WHERE id_codigo = $1', [d.id_codigo])).rows[0].codigo_hash
   );
   if (!crypto.timingSafeEqual(recebido, esperado)) {
-    await db.query('UPDATE desafio_mfa SET tentativas = tentativas + 1 WHERE id_desafio = $1', [d.id_desafio]);
+    await db.query('UPDATE codigo_mfa SET tentativas = tentativas + 1 WHERE id_codigo = $1', [d.id_codigo]);
     const restantes = MFA_MAX_TENTATIVAS - d.tentativas - 1;
     return { ok: false, erro: `Código incorreto. ${restantes > 0 ? `${restantes} tentativa(s) restante(s).` : 'Peça um novo código.'}` };
   }
 
-  await db.query('UPDATE desafio_mfa SET usado_em = NOW() WHERE id_desafio = $1', [d.id_desafio]);
+  await db.query('UPDATE codigo_mfa SET usado_em = NOW() WHERE id_codigo = $1', [d.id_codigo]);
   return { ok: true, idVitima: d.id_vitima };
 }
 
@@ -224,6 +224,6 @@ module.exports = {
   sessaoAindaValida,
   encerrarSessao,
   encerrarTodasSessoes,
-  criarDesafio,
+  criarCodigo,
   conferirCodigo,
 };

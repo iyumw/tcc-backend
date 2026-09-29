@@ -52,9 +52,9 @@ async function enviarCodigo(req, res, next) {
       return res.status(400).json({ erro: '"finalidade" deve ser "alterar_dados" ou "excluir_conta".' });
     }
     const { rows } = await db.query('SELECT email FROM vitima WHERE id_vitima = $1', [req.usuario.idVitima]);
-    const desafio = await authService.criarDesafio(req.usuario.idVitima, finalidade);
-    await emailService.enviarCodigo(rows[0].email, desafio.codigo, finalidade, desafio.validadeMinutos);
-    return res.json({ mensagem: 'Enviamos um código para o seu e-mail.', validade_minutos: desafio.validadeMinutos });
+    const codigoMfa = await authService.criarCodigo(req.usuario.idVitima, finalidade);
+    await emailService.enviarCodigo(rows[0].email, codigoMfa.codigo, finalidade, codigoMfa.validadeMinutos);
+    return res.json({ mensagem: 'Enviamos um código para o seu e-mail.', validade_minutos: codigoMfa.validadeMinutos });
   } catch (erro) {
     next(erro);
   }

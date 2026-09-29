@@ -58,8 +58,8 @@ CREATE TABLE IF NOT EXISTS sessao (
 );
 
 -- --- códigos de verificação por e-mail (MFA, recuperação de senha, etc.) -----
-CREATE TABLE IF NOT EXISTS desafio_mfa (
-    id_desafio UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+CREATE TABLE IF NOT EXISTS codigo_mfa (
+    id_codigo UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     id_vitima INTEGER NOT NULL REFERENCES vitima(id_vitima) ON DELETE CASCADE,
     finalidade VARCHAR(30) NOT NULL
         CHECK (finalidade IN ('login', 'recuperar_senha', 'alterar_dados', 'excluir_conta')),

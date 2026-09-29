@@ -139,13 +139,13 @@ async function login(req, res, next) {
       `UPDATE vitima SET falhas_login = 0, ja_foi_bloqueada = FALSE, bloqueada_ate = NULL WHERE id_vitima = $1`,
       [v.id_vitima]
     );
-    const desafio = await authService.criarDesafio(v.id_vitima, 'login');
-    await emailService.enviarCodigo(v.email, desafio.codigo, 'login', desafio.validadeMinutos);
+    const codigoMfa = await authService.criarCodigo(v.id_vitima, 'login');
+    await emailService.enviarCodigo(v.email, codigoMfa.codigo, 'login', codigoMfa.validadeMinutos);
     await auditoria.registrar('login_senha_ok_mfa_enviado', { idVitima: v.id_vitima, req });
 
     return res.json({
-      mfa_token: desafio.idDesafio,
-      validade_minutos: desafio.validadeMinutos,
+      mfa_token: codigoMfa.idCodigo,
+      validade_minutos: codigoMfa.validadeMinutos,
       email_mascarado: mascararEmail(v.email),
       mensagem: 'Enviamos um código de 6 dígitos para o seu e-mail.',
     });
@@ -165,7 +165,7 @@ async function verificarMfa(req, res, next) {
     if (!mfaToken || !/^[0-9a-f-]{36}$/i.test(String(mfaToken))) {
       return erro400(res, 'mfa_token inválido.');
     }
-    const r = await authService.conferirCodigo({ idDesafio: mfaToken, finalidade: 'login', codigo });
+    const r = await authService.conferirCodigo({ idCodigo: mfaToken, finalidade: 'login', codigo });
     if (!r.ok) {
       await auditoria.registrar('mfa_falha', { detalhes: { mfa_token: mfaToken }, req });
       return res.status(401).json({ erro: r.erro, codigo: 'MFA_INVALIDO' });
@@ -188,15 +188,15 @@ async function reenviarMfa(req, res, next) {
 
 
     const { rows } = await db.query(
-      `SELECT d.id_vitima, v.email FROM desafio_mfa d JOIN vitima v ON v.id_vitima = d.id_vitima
-        WHERE d.id_desafio = $1 AND d.finalidade = 'login' AND d.criado_em > NOW() - INTERVAL '15 minutes'`,
+      `SELECT d.id_vitima, v.email FROM codigo_mfa d JOIN vitima v ON v.id_vitima = d.id_vitima
+        WHERE d.id_codigo = $1 AND d.finalidade = 'login' AND d.criado_em > NOW() - INTERVAL '15 minutes'`,
       [mfaToken]
     );
     if (!rows.length) return res.status(401).json({ erro: 'Faça login novamente.', codigo: 'MFA_EXPIRADO' });
 
-    const desafio = await authService.criarDesafio(rows[0].id_vitima, 'login');
-    await emailService.enviarCodigo(rows[0].email, desafio.codigo, 'login', desafio.validadeMinutos);
-    return res.json({ mfa_token: desafio.idDesafio, validade_minutos: desafio.validadeMinutos });
+    const codigoMfa = await authService.criarCodigo(rows[0].id_vitima, 'login');
+    await emailService.enviarCodigo(rows[0].email, codigoMfa.codigo, 'login', codigoMfa.validadeMinutos);
+    return res.json({ mfa_token: codigoMfa.idCodigo, validade_minutos: codigoMfa.validadeMinutos });
   } catch (erro) {
     next(erro);
   }
@@ -220,8 +220,8 @@ async function esqueciSenha(req, res, next) {
       [email]
     );
     if (rows.length && !rows[0].bloqueio_permanente) {
-      const desafio = await authService.criarDesafio(rows[0].id_vitima, 'recuperar_senha');
-      await emailService.enviarCodigo(rows[0].email, desafio.codigo, 'recuperar_senha', desafio.validadeMinutos);
+      const codigoMfa = await authService.criarCodigo(rows[0].id_vitima, 'recuperar_senha');
+      await emailService.enviarCodigo(rows[0].email, codigoMfa.codigo, 'recuperar_senha', codigoMfa.validadeMinutos);
       await auditoria.registrar('recuperacao_senha_solicitada', { idVitima: rows[0].id_vitima, req });
     }
     return res.json({ mensagem: 'Se o e-mail estiver cadastrado, enviamos um código para ele.' });
