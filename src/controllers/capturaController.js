@@ -137,7 +137,6 @@ async function encerrarSessao(req, res) {
     res.status(202).json({
       session_id,
       status: 'processando',
-      url_storage: caminhoVideo,
     });
 
     finalizarGravacao(idAcionamento, session_id, pastaFrames, caminhoVideo);

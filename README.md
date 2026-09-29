@@ -4,7 +4,29 @@ API de Serviço do projeto Safe Evidence (TCC), responsável por receber,
 armazenar e processar as evidências digitais capturadas pelo hardware
 (relógio + ESP32-CAM).
 
+```
+Relógio ──BLE──> ESP32-CAM ──HTTPS──> Backend (EC2) ──> RDS (metadados) + S3 (vídeos)
+                                         │   ▲
+                         Portal (front) ─┘   └── Serviço de IA (callback)
+```
+
+**Em produção:** `https://safeevidence.duckdns.org` (teste com `/health`).
+Base da API para o front e o Postman: `https://safeevidence.duckdns.org/api`.
+
+## Documentação
+
+| Arquivo | Pra quem | Conteúdo |
+| --- | --- | --- |
+| `docs/api-portal.md` | front (portal) | todas as rotas do portal, erros e exemplos |
+| `docs/contrato-ia.md` | serviço de IA | o que o backend manda e o que a IA devolve |
+| `docs/aws-setup.md` | infra | RDS e S3: acesso, tabelas, retenção, IAM, CT04/CT06 |
+| `docs/deploy-aws.md` | infra | publicar e atualizar o backend na EC2 com HTTPS |
+| `docs/postman/` | testes | coleção do Postman com o fluxo completo do portal |
+| `docs/testes-api.http` | testes | mesmos testes, pela extensão REST Client do VS Code |
+
 ## Setup
+
+Requer **Node.js 22** (o ffmpeg vem junto, pelo pacote `ffmpeg-static`).
 
 ```bash
 npm install
@@ -56,13 +78,15 @@ npm start     # sem auto-reload
 O servidor sobe em `http://localhost:8080` por padrão (configurável via
 `PORT` no `.env`).
 
-> Pra testar: cadastre o `dispositivo` no banco (o `id_dispositivo` precisa
-> bater com o `DEVICE_ID` do firmware da ESP32-CAM), crie uma conta pelo
-> portal (`POST /api/auth/cadastro`) e vincule o dispositivo a ela
-> (`POST /api/perfil/dispositivo`). Detalhes em `docs/api-portal.md`.
+> Pra testar com a câmera: cadastre o dispositivo e gere a chave dele
+> (`npm run chave-dispositivo -- esp32cam-01`, ver "Autenticação da câmera"),
+> crie uma conta pelo portal (`POST /api/auth/cadastro`) e vincule o
+> dispositivo a ela (`POST /api/perfil/dispositivo`). Detalhes em
+> `docs/api-portal.md`.
 >
 > **Banco criado antes desta versão:** rode as migrações de
-> `src/db/migrations/` que ainda não rodou (instruções no topo de cada uma).
+> `src/db/migrations/` que ainda não rodou (instruções no topo de cada uma;
+> todas podem rodar mais de uma vez).
 
 ## Endpoints
 
@@ -93,9 +117,9 @@ requisição da câmera manda os cabeçalhos `X-Dispositivo-Id` e
 O `session_id` precisa começar com o id do próprio dispositivo
 (`esp32cam-01-...`), senão `403`: uma câmera não mexe nas sessões de outra.
 
-> `/api/evidencia/*` (sem o "s") é o endereço antigo da captura e continua
-> funcionando só pra não quebrar o firmware já gravado na placa. O firmware
-> novo usa `/api/captura/*`.
+> `/api/evidencia/*` (sem o "s") é um endereço antigo da captura, mantido
+> como apelido de `/api/captura/*` (exige a mesma chave). O firmware atual
+> usa `/api/captura/*`.
 
 ### Organização do código
 
@@ -141,29 +165,28 @@ que precisa já existir na tabela `dispositivo`).
 ```
 
 ### `POST /api/captura/sessao/encerrar`
-Chamado pela ESP32-CAM quando recebe o comando STOP do relógio. 
-Junta todos os frames recebidos daquela sessão num único
-`.mp4` (via ffmpeg), calcula o hash SHA-256 do vídeo final (RN05) e
-grava tudo na tabela `gravacao`. Depois de montar o vídeo, os frames
-individuais são apagados.
+Chamado pela ESP32-CAM quando recebe o comando STOP do relógio.
+Responde na hora (`202`) e, em segundo plano, junta os frames daquela
+sessão num único `.mp4` (via ffmpeg), calcula o hash SHA-256 do vídeo
+(RN05), guarda o vídeo (local ou S3), grava a linha em `gravacao` e manda
+o vídeo para a IA. Depois de montar o vídeo, os frames individuais são
+apagados. O resultado aparece no log do backend e em `GET /api/evidencias`.
 
 **Body:**
 ```json
 { "session_id": "esp32cam-01-123456" }
 ```
 
-**Resposta (201):**
+**Resposta (202):**
 ```json
-{
-  "id_gravacao": 1,
-  "url_storage": "/caminho/local/do/video.mp4",
-  "hash_seguranca": "64889dbf..."
-}
+{ "session_id": "esp32cam-01-123456", "status": "processando" }
 ```
 
-**Erros possíveis (upload e encerrar):**
+**Erros possíveis (abrir, upload e encerrar):**
 - `400` — campo obrigatório ausente, ou nenhum frame recebido pra sessão
-- `404` — dispositivo ou sessão não encontrados
+- `401` — sem chave do dispositivo, ou chave errada
+- `403` — `device_id` ou `session_id` de outro dispositivo
+- `404` — sessão não encontrada
 - `500` — erro interno
 
 ### `GET /api/evidencias/:id/arquivo?expira=...&assinatura=...`
@@ -189,8 +212,8 @@ npm run ia-mock
 ```
 
 e no `.env`: `IA_SERVICE_URL=http://localhost:8090` e um
-`IA_CALLBACK_TOKEN` qualquer. **Banco já existente:** rode a migração
-`src/db/migrations/002_pipeline_ia.sql` (instruções no topo do arquivo).
+`IA_CALLBACK_TOKEN` qualquer. Sem `IA_SERVICE_URL`, as análises ficam
+`Pendente` até o serviço ser configurado.
 
 ## Armazenamento (local ou AWS S3)
 
