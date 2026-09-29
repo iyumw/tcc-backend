@@ -1,19 +1,25 @@
 const fs = require('fs');
 const crypto = require('crypto');
+const { PassThrough } = require('stream');
 
-const GCS_BUCKET = process.env.GCS_BUCKET || '';
-const MODO_GCS = Boolean(GCS_BUCKET);
+// Vídeos no AWS S3 quando S3_BUCKET está definido; senão, em tmp/videos/ (modo local).
+const S3_BUCKET = process.env.S3_BUCKET || '';
+const MODO_S3 = Boolean(S3_BUCKET);
 
 const VALIDADE_URL_MIN = Number(process.env.URL_VALIDADE_MINUTOS) || 15;
 
-let bucket = null;
-if (MODO_GCS) {
-  const { Storage } = require('@google-cloud/storage');
-  bucket = new Storage().bucket(GCS_BUCKET);
+let s3 = null;
+let S3 = null;
+let getSignedUrl = null;
+if (MODO_S3) {
+  S3 = require('@aws-sdk/client-s3');
+  ({ getSignedUrl } = require('@aws-sdk/s3-request-presigner'));
+  // Credenciais e região vêm de AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY e AWS_REGION.
+  s3 = new S3.S3Client({ region: process.env.AWS_REGION });
 }
 
 let segredoLocal = process.env.URL_SIGNING_SECRET;
-if (!MODO_GCS && !segredoLocal) {
+if (!MODO_S3 && !segredoLocal) {
   segredoLocal = crypto.randomBytes(32).toString('hex');
   console.warn(
     '[StorageService] URL_SIGNING_SECRET não definido — usando um segredo ' +
@@ -28,72 +34,91 @@ function assinarLocal(idGravacao, expiraEm) {
     .digest('hex');
 }
 
-async function salvarVideo(caminhoLocal, nomeObjeto, { sha256, sessionId }) {
-  if (!MODO_GCS) {
-    return caminhoLocal;
-  }
-
-  const destino = `videos/${nomeObjeto}`;
-  await bucket.upload(caminhoLocal, {
-    destination: destino,
-    preconditionOpts: { ifGenerationMatch: 0 },
-    metadata: {
-      contentType: 'video/mp4',
-      metadata: {
-        sha256,
-        session_id: sessionId,
-        recebido_em: new Date().toISOString(),
-      },
-    },
-  });
-
-  fs.rmSync(caminhoLocal, { force: true });
-  return `gs://${GCS_BUCKET}/${destino}`;
+function ehUrlS3(urlStorage) {
+  return urlStorage.startsWith('s3://');
 }
 
-function nomeObjetoDe(urlStorage) {
-  const prefixo = `gs://${GCS_BUCKET}/`;
+function chaveDe(urlStorage) {
+  if (!MODO_S3) {
+    throw new Error('Gravação está no S3, mas S3_BUCKET não está configurado.');
+  }
+  const prefixo = `s3://${S3_BUCKET}/`;
   if (!urlStorage.startsWith(prefixo)) {
-    throw new Error(`url_storage "${urlStorage}" não pertence ao bucket ${GCS_BUCKET}.`);
+    throw new Error(`url_storage "${urlStorage}" não pertence ao bucket ${S3_BUCKET}.`);
   }
   return urlStorage.slice(prefixo.length);
 }
 
-function ehUrlGcs(urlStorage) {
-  return urlStorage.startsWith('gs://');
+async function salvarVideo(caminhoLocal, nomeObjeto, { sha256, sessionId }) {
+  if (!MODO_S3) {
+    return caminhoLocal;
+  }
+
+  const chave = `videos/${nomeObjeto}`;
+  await s3.send(
+    new S3.PutObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: chave,
+      Body: fs.createReadStream(caminhoLocal),
+      ContentLength: fs.statSync(caminhoLocal).size,
+      ContentType: 'video/mp4',
+      // Write once: falha se já existir um objeto com essa chave.
+      IfNoneMatch: '*',
+      // O S3 confere o SHA-256 ao receber e recusa o upload se o arquivo chegar diferente.
+      ChecksumSHA256: Buffer.from(sha256, 'hex').toString('base64'),
+      // RN01: criptografia em repouso (AES-256).
+      ServerSideEncryption: 'AES256',
+      Metadata: {
+        sha256,
+        session_id: sessionId,
+        recebido_em: new Date().toISOString(),
+      },
+    })
+  );
+
+  fs.rmSync(caminhoLocal, { force: true });
+  return `s3://${S3_BUCKET}/${chave}`;
 }
 
+// Devolve o stream na hora (como o fs.createReadStream); o download do S3 entra nele depois.
 function abrirLeitura(urlStorage) {
-  if (ehUrlGcs(urlStorage)) {
-    if (!MODO_GCS) {
-      throw new Error('Gravação está no GCS, mas GCS_BUCKET não está configurado.');
-    }
-    return bucket.file(nomeObjetoDe(urlStorage)).createReadStream();
+  if (!ehUrlS3(urlStorage)) {
+    return fs.createReadStream(urlStorage);
   }
-  return fs.createReadStream(urlStorage);
+  const saida = new PassThrough();
+  s3.send(new S3.GetObjectCommand({ Bucket: S3_BUCKET, Key: chaveDe(urlStorage) }))
+    .then((resposta) => {
+      resposta.Body.on('error', (erro) => saida.destroy(erro));
+      resposta.Body.pipe(saida);
+    })
+    .catch((erro) => saida.destroy(erro));
+  return saida;
 }
 
 async function existe(urlStorage) {
-  if (ehUrlGcs(urlStorage)) {
-    if (!MODO_GCS) return false;
-    const [ok] = await bucket.file(nomeObjetoDe(urlStorage)).exists();
-    return ok;
+  if (!ehUrlS3(urlStorage)) {
+    return fs.existsSync(urlStorage);
   }
-  return fs.existsSync(urlStorage);
+  try {
+    await s3.send(new S3.HeadObjectCommand({ Bucket: S3_BUCKET, Key: chaveDe(urlStorage) }));
+    return true;
+  } catch (erro) {
+    if (erro.name === 'NotFound' || (erro.$metadata && erro.$metadata.httpStatusCode === 404)) {
+      return false;
+    }
+    throw erro;
+  }
 }
 
 async function gerarUrlAssinada(idGravacao, urlStorage, baseUrl, validadeMin = VALIDADE_URL_MIN) {
   const expiraEm = Date.now() + validadeMin * 60 * 1000;
 
-  if (ehUrlGcs(urlStorage)) {
-    if (!MODO_GCS) {
-      throw new Error('Gravação está no GCS, mas GCS_BUCKET não está configurado.');
-    }
-    const [url] = await bucket.file(nomeObjetoDe(urlStorage)).getSignedUrl({
-      version: 'v4',
-      action: 'read',
-      expires: expiraEm,
-    });
+  if (ehUrlS3(urlStorage)) {
+    const url = await getSignedUrl(
+      s3,
+      new S3.GetObjectCommand({ Bucket: S3_BUCKET, Key: chaveDe(urlStorage) }),
+      { expiresIn: validadeMin * 60 }
+    );
     return { url, expira_em: new Date(expiraEm).toISOString() };
   }
 
@@ -121,9 +146,9 @@ function validarAssinaturaLocal(idGravacao, expira, assinatura) {
 
 async function apagar(urlStorage) {
   try {
-    if (ehUrlGcs(urlStorage)) {
-      if (!MODO_GCS) return { apagado: false, motivo: 'GCS não configurado.' };
-      await bucket.file(nomeObjetoDe(urlStorage)).delete({ ignoreNotFound: true });
+    if (ehUrlS3(urlStorage)) {
+      // Com Object Lock (RN09), o S3 guarda a versão até o fim da retenção mesmo assim.
+      await s3.send(new S3.DeleteObjectCommand({ Bucket: S3_BUCKET, Key: chaveDe(urlStorage) }));
       return { apagado: true };
     }
     fs.rmSync(urlStorage, { force: true });
@@ -135,7 +160,7 @@ async function apagar(urlStorage) {
 
 module.exports = {
   apagar,
-  MODO_GCS,
+  MODO_S3,
   VALIDADE_URL_MIN,
   salvarVideo,
   abrirLeitura,

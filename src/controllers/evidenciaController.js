@@ -267,7 +267,7 @@ async function buscarGravacao(idTexto) {
 
 async function servirArquivoLocal(req, res, next) {
   try {
-    if (storage.MODO_GCS) {
+    if (storage.MODO_S3) {
       return res.status(404).json({ erro: 'Rota disponível apenas no modo local.' });
     }
 

@@ -37,7 +37,7 @@ Corpo:
 ```json
 {
   "id_gravacao": 12,
-  "video_url": "https://storage.googleapis.com/...(URL assinada, vale 60 min)",
+  "video_url": "https://<bucket>.s3.sa-east-1.amazonaws.com/...(URL assinada, vale 60 min)",
   "video_url_expira_em": "2026-09-22T23:50:00.000Z",
   "hash_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "duracao_segundos": 16.44,
@@ -214,5 +214,5 @@ O serviço de IA precisa alcançar o backend (pra baixar o vídeo no modo
 local e pra chamar o `callback_url`). Se os dois não estiverem na mesma
 máquina, configure `PUBLIC_BASE_URL` no backend com um endereço que o
 serviço consiga acessar. Um serviço rodando no **Colab**, por exemplo, não
-alcança `192.168.x.x`: aí o backend precisa estar publicado (Cloud Run) ou
+alcança `192.168.x.x`: aí o backend precisa estar publicado (ex.: numa EC2) ou
 exposto por um túnel.

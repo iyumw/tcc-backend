@@ -1,6 +1,6 @@
 -- Schema do banco de dados do Safe Evidence.
 -- Idêntico ao script apresentado no Apêndice A do TCC (Tabela 4 - Dicionário
--- de dados). Rode este arquivo uma vez pra criar as tabelas no Cloud SQL
+-- de dados). Rode este arquivo uma vez pra criar as tabelas no AWS RDS
 -- (ou em qualquer Postgres local pra desenvolvimento).
 
 CREATE TABLE vitima (

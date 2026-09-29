@@ -23,9 +23,9 @@ docker compose up -d
 Isso sobe um Postgres 16 local e já cria as tabelas automaticamente na
 primeira vez (o `schema.sql` é montado em
 `/docker-entrypoint-initdb.d/`, que a imagem oficial do Postgres executa
-sozinha quando o volume de dados está vazio). Os valores padrão do
-`.env.example` (`DB_HOST=127.0.0.1`, usuário/senha `postgres`) já batem
-com o `docker-compose.yml`, então não precisa mudar nada pra testar.
+sozinha quando o volume de dados está vazio). No `.env`, use
+`DB_HOST=127.0.0.1`, `DB_PASSWORD=postgres` e `DB_SSL=false`, que batem
+com o `docker-compose.yml`.
 
 Pra conferir se as tabelas foram criadas:
 
@@ -39,14 +39,11 @@ Pra derrubar o banco (mantendo os dados salvos no volume):
 docker compose down
 ```
 
-### Opção B — Cloud SQL / Postgres já existente
+### Opção B — AWS RDS
 
-```bash
-psql "postgresql://USUARIO:SENHA@HOST:5432/safe_evidence" -f src/db/schema.sql
-```
-
-(Se estiver usando o Cloud SQL Auth Proxy localmente, aponte `HOST` para
-`127.0.0.1` com o proxy rodando.)
+Coloque o endpoint e a senha do RDS no `.env`, com `DB_SSL=true` e
+`DB_SSL_CA=./global-bundle.pem`. Como liberar o acesso, baixar o
+certificado e criar as tabelas: `docs/aws-setup.md`.
 
 ## Rodando localmente
 
@@ -187,11 +184,12 @@ e no `.env`: `IA_SERVICE_URL=http://localhost:8090` e um
 `IA_CALLBACK_TOKEN` qualquer. **Banco já existente:** rode a migração
 `src/db/migrations/002_pipeline_ia.sql` (instruções no topo do arquivo).
 
-## Armazenamento (local ou Google Cloud Storage)
+## Armazenamento (local ou AWS S3)
 
-Sem `GCS_BUCKET` no `.env`, os vídeos ficam em `tmp/videos/`. Com ele,
-sobem pro bucket. Passo a passo de criação do bucket, permissões e
-testes dos CT04/CT06: `docs/gcs-setup.md`.
+Sem `S3_BUCKET` no `.env`, os vídeos ficam em `tmp/videos/`. Com ele,
+sobem pro bucket do S3. Passo a passo de criação do bucket, retenção
+(Object Lock), permissões do IAM e testes dos CT04/CT06:
+`docs/aws-setup.md`.
 
 ## Próximos passos
 

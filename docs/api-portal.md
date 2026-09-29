@@ -1,6 +1,6 @@
 # API do portal (para o front em Angular)
 
-Base: `http://localhost:8080/api` (em produção, a URL do Cloud Run).
+Base: `http://localhost:8080/api` (em produção, o endereço onde o backend for publicado).
 
 Todas as respostas são JSON. Erros sempre vêm como:
 
