@@ -70,12 +70,28 @@ A API está dividida por quem chama:
 
 | Prefixo | Quem chama | Autenticação |
 | --- | --- | --- |
-| `/api/captura/*` | ESP32-CAM | nenhuma ainda (chaves em eFuse ficam como trabalho futuro) |
+| `/api/captura/*` | ESP32-CAM | chave do dispositivo (ver abaixo) |
 | `/api/ia/*` | serviço de IA | `IA_CALLBACK_TOKEN` (`docs/contrato-ia.md`) |
 | `/api/auth/*`, `/api/perfil/*`, `/api/evidencias/*` | portal (front) | login + MFA por e-mail (`docs/api-portal.md`) |
 
 Rotas do portal: veja **`docs/api-portal.md`** (é o documento pra quem faz
 o front). Abaixo, as rotas do dispositivo e da IA.
+
+### Autenticação da câmera
+
+Cada dispositivo tem uma chave secreta; o banco guarda só o SHA-256 dela
+(`dispositivo.chave_hash`, migração `005_chave_dispositivo.sql`). Para
+cadastrar um dispositivo e gerar a chave (ou trocar uma chave vazada):
+
+```bash
+npm run chave-dispositivo -- esp32cam-01
+```
+
+A chave aparece uma vez no terminal: cole no `DEVICE_KEY` do firmware. Toda
+requisição da câmera manda os cabeçalhos `X-Dispositivo-Id` e
+`X-Dispositivo-Chave`; sem eles, ou com a chave errada, a resposta é `401`.
+O `session_id` precisa começar com o id do próprio dispositivo
+(`esp32cam-01-...`), senão `403`: uma câmera não mexe nas sessões de outra.
 
 > `/api/evidencia/*` (sem o "s") é o endereço antigo da captura e continua
 > funcionando só pra não quebrar o firmware já gravado na placa. O firmware
@@ -104,10 +120,8 @@ Abre uma nova sessão de captura para um dispositivo já cadastrado.
 (Endpoint auxiliar — no fluxo real com a ESP32-CAM, a sessão é aberta
 automaticamente no primeiro frame recebido, ver `/upload` abaixo.)
 
-**Body:**
-```json
-{ "id_dispositivo": "ESP32-CAM-XXXX" }
-```
+**Body:** vazio. O dispositivo é o da chave; se mandar `id_dispositivo`,
+ele tem que ser o mesmo.
 
 ### `POST /api/captura/upload`
 Recebe UM frame JPEG da ESP32-CAM (chamado repetidamente durante a
@@ -185,9 +199,21 @@ sobem pro bucket do S3. Passo a passo de criação do bucket, retenção
 (Object Lock), permissões do IAM e testes dos CT04/CT06:
 `docs/aws-setup.md`.
 
+## Publicando na AWS
+
+O backend roda numa EC2 (São Paulo), com HTTPS pelo Caddy e um domínio do
+DuckDNS. Passo a passo completo, do zero: `docs/deploy-aws.md`. Os arquivos
+de configuração do servidor ficam em `deploy/`.
+
+Para atualizar o servidor depois de um `git push`:
+
+```bash
+cd ~/tcc-backend && bash deploy/atualizar.sh
+```
+
 ## Próximos passos
 
 - Timestamp confiável RFC 3161 — hoje só grava `data_hora` do servidor
-- Autenticação do dispositivo (chaves em eFuse) nas rotas `/api/captura/*`
+- Guardar a chave da câmera cifrada na flash (eFuse / flash encryption) em vez de no firmware
 - Perfil de colaborador interno / ordem judicial (RN11 / CT05 completo)
 - Laudo em PDF (hoje o download é JSON com metadados de integridade)

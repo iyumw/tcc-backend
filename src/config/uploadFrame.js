@@ -2,6 +2,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { FRAMES_DIR } = require('./paths');
+const { sessaoPertenceAoDispositivo } = require('../middleware/autenticarDispositivo');
 
 // Salva cada frame em uma pasta por sessão.
 const storage = multer.diskStorage({
@@ -9,6 +10,12 @@ const storage = multer.diskStorage({
     const sessionId = req.body.session_id;
     if (!sessionId) {
       return cb(new Error('Campo "session_id" ausente ou fora de ordem no multipart.'));
+    }
+    if (!sessaoPertenceAoDispositivo(sessionId, req.dispositivo.id)) {
+      return cb(Object.assign(new Error('session_id inválido para este dispositivo.'), {
+        statusCode: 403,
+        publicMessage: 'session_id inválido para este dispositivo.',
+      }));
     }
     const pasta = path.join(FRAMES_DIR, sessionId);
     fs.mkdirSync(pasta, { recursive: true });

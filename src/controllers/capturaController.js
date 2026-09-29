@@ -7,14 +7,13 @@ const { calcularHashSHA256 } = require('../services/custodiaService');
 const storage = require('../services/storageService');
 const pipelineIA = require('../services/pipelineIAService');
 const eventos = require('../services/eventosService');
+const { sessaoPertenceAoDispositivo } = require('../middleware/autenticarDispositivo');
 
 async function abrirSessao(req, res) {
-  const { id_dispositivo } = req.body;
-
-  if (!id_dispositivo || typeof id_dispositivo !== 'string') {
-    return res.status(400).json({
-      erro: 'Campo "id_dispositivo" é obrigatório e deve ser uma string.',
-    });
+  // O dispositivo é o autenticado pela chave; o corpo, se vier, tem que bater.
+  const id_dispositivo = req.dispositivo.id;
+  if (req.body.id_dispositivo && req.body.id_dispositivo !== id_dispositivo) {
+    return res.status(403).json({ erro: 'id_dispositivo diferente do dispositivo autenticado.' });
   }
 
   try {
@@ -55,6 +54,11 @@ async function receberFrame(req, res) {
     return res.status(400).json({
       erro: 'Campos "device_id" e "session_id" são obrigatórios.',
     });
+  }
+
+  if (device_id !== req.dispositivo.id) {
+    if (req.file) fs.rmSync(req.file.path, { force: true });
+    return res.status(403).json({ erro: 'device_id diferente do dispositivo autenticado.' });
   }
 
   if (!req.file) {
@@ -103,10 +107,14 @@ async function encerrarSessao(req, res) {
     return res.status(400).json({ erro: 'Campo "session_id" é obrigatório.' });
   }
 
+  if (!sessaoPertenceAoDispositivo(session_id, req.dispositivo.id)) {
+    return res.status(403).json({ erro: 'session_id inválido para este dispositivo.' });
+  }
+
   try {
     const sessao = await db.query(
-      'SELECT id_acionamento FROM acionamento WHERE external_session_id = $1',
-      [session_id]
+      'SELECT id_acionamento FROM acionamento WHERE external_session_id = $1 AND id_device = $2',
+      [session_id, req.dispositivo.id]
     );
 
     if (sessao.rows.length === 0) {
