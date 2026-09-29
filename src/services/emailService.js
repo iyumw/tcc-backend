@@ -1,6 +1,7 @@
 const SMTP_HOST = process.env.SMTP_HOST || '';
 const EMAIL_FROM = process.env.EMAIL_FROM || process.env.SMTP_USER || 'Safe Evidence <nao-responda@safe-evidence.local>';
-const MOSTRAR_NO_TERMINAL = process.env.NODE_ENV !== 'production';
+// Sem SMTP configurado, o código aparece no terminal (pra testar sem e-mail).
+const MOSTRAR_NO_TERMINAL = !SMTP_HOST;
 
 let transporte = null;
 if (SMTP_HOST) {
