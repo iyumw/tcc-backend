@@ -1,0 +1,8 @@
+# Caddy: recebe HTTPS na porta 443 e repassa para o backend na 8080.
+# Gera e renova sozinho o certificado (Let's Encrypt).
+# Troque o domínio abaixo pelo seu e copie:
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
+
+SEU-SUBDOMINIO.duckdns.org {
+	reverse_proxy 127.0.0.1:8080
+}

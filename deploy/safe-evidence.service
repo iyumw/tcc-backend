@@ -1,0 +1,20 @@
+# Serviço do backend no servidor (systemd): sobe junto com a máquina e
+# reinicia sozinho se cair.
+#   sudo cp deploy/safe-evidence.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now safe-evidence
+# Logs: journalctl -u safe-evidence -f
+
+[Unit]
+Description=Safe Evidence - backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/tcc-backend
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
