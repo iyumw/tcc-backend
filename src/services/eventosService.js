@@ -1,8 +1,13 @@
 const { EventEmitter } = require('events');
 const db = require('../config/db');
+const { numeroOuNulo } = require('../utils/validacao');
 
 const emissor = new EventEmitter();
 emissor.setMaxListeners(0);
+
+function canalDa(idVitima) {
+  return `vitima:${idVitima}`;
+}
 
 async function notificarStatus(idGravacao) {
   try {
@@ -14,24 +19,24 @@ async function notificarStatus(idGravacao) {
         WHERE g.id_gravacao = $1`,
       [idGravacao]
     );
-    const r = rows[0];
-    if (!r || r.id_vitima === null) return;
-    emissor.emit(`vitima:${r.id_vitima}`, {
+    const gravacao = rows[0];
+    if (!gravacao || gravacao.id_vitima === null) return;
+    emissor.emit(canalDa(gravacao.id_vitima), {
       tipo: 'status_analise',
-      id_gravacao: r.id_gravacao,
-      status_analise: r.status_analise,
-      veredicto: r.veredicto,
-      score: r.score !== null ? Number(r.score) : null,
+      id_gravacao: gravacao.id_gravacao,
+      status_analise: gravacao.status_analise,
+      veredicto: gravacao.veredicto,
+      score: numeroOuNulo(gravacao.score),
     });
   } catch (erro) {
     console.error('[Eventos] Falha ao notificar status:', erro.message);
   }
 }
 
-function assinar(idVitima, callback) {
-  const canal = `vitima:${idVitima}`;
-  emissor.on(canal, callback);
-  return () => emissor.off(canal, callback);
+function assinar(idVitima, aoReceber) {
+  const canal = canalDa(idVitima);
+  emissor.on(canal, aoReceber);
+  return () => emissor.off(canal, aoReceber);
 }
 
 module.exports = { notificarStatus, assinar };

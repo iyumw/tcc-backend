@@ -18,28 +18,26 @@ garantirPastas();
 
 const app = express();
 
-// Ajusta IP/protocolo quando a API fica atrás de proxy.
+// Atrás do Caddy: usa o IP e o protocolo que ele repassa.
 app.set('trust proxy', 1);
 
 app.use(helmet());
 
-// Permite apenas o front autorizado acessar a API no navegador.
 const origensPermitidas = (process.env.FRONT_URL || 'http://localhost:4200')
   .split(',')
-  .map((o) => o.trim())
+  .map((origem) => origem.trim())
   .filter(Boolean);
 app.use(cors({ origin: origensPermitidas, exposedHeaders: ['Content-Disposition', 'X-Laudo-SHA256'] }));
 app.use(express.json());
 
 app.use(morgan('dev'));
 
-// Verificação rápida de saúde do serviço.
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
 app.use('/api/captura', capturaRoutes);
-app.use('/api/evidencia', capturaRoutes);
+app.use('/api/evidencia', capturaRoutes); // endereço antigo da captura
 app.use('/api/ia', iaRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/perfil', perfilRoutes);

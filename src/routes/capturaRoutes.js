@@ -5,7 +5,7 @@ const { autenticarDispositivo } = require('../middleware/autenticarDispositivo')
 
 const router = express.Router();
 
-// Todas as rotas da câmera exigem a chave do dispositivo (antes de gravar qualquer arquivo).
+// Antes do upload, para nenhum arquivo ser gravado sem a chave do dispositivo.
 router.use(autenticarDispositivo);
 
 router.post('/sessao/abrir', capturaController.abrirSessao);

@@ -1,9 +1,8 @@
 const fs = require('fs');
 const { Pool } = require('pg');
 
-// SSL (obrigatório no AWS RDS). DB_SSL_CA = caminho do certificado da AWS
-// (global-bundle.pem): com ele, o backend confere que está falando com o
-// RDS de verdade. Sem ele, a conexão é cifrada mas o servidor não é conferido.
+// O RDS exige SSL. Com DB_SSL_CA (certificado da AWS), o backend também confere
+// que está falando com o RDS de verdade.
 function configurarSsl() {
   if (process.env.DB_SSL !== 'true') return undefined;
   if (process.env.DB_SSL_CA) {

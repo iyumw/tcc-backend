@@ -1,13 +1,19 @@
+// O banco guarda só o SHA-256 da chave de cada dispositivo (gerada com "npm run chave-dispositivo").
 const crypto = require('crypto');
 const db = require('../config/db');
 
-// Autentica a ESP32-CAM nas rotas /api/captura/*.
-// Cada dispositivo tem uma chave secreta (gerada com "npm run chave-dispositivo");
-// o banco guarda só o SHA-256 dela. A câmera manda os cabeçalhos:
-//   X-Dispositivo-Id: esp32cam-01
-//   X-Dispositivo-Chave: <chave>
+const NAO_AUTENTICADO = 'Dispositivo não autenticado.';
+
 function hashChave(chave) {
   return crypto.createHash('sha256').update(String(chave)).digest('hex');
+}
+
+// timingSafeEqual: o tempo de resposta não revela quanto da chave estava certo.
+function chaveConfere(chave, chaveHash) {
+  if (!chaveHash) return false;
+  const esperado = Buffer.from(chaveHash.trim(), 'hex');
+  const recebido = Buffer.from(hashChave(chave), 'hex');
+  return esperado.length === recebido.length && crypto.timingSafeEqual(esperado, recebido);
 }
 
 async function autenticarDispositivo(req, res, next) {
@@ -15,7 +21,7 @@ async function autenticarDispositivo(req, res, next) {
   const chave = req.get('x-dispositivo-chave');
 
   if (!id || !chave) {
-    return res.status(401).json({ erro: 'Dispositivo não autenticado.', codigo: 'DISPOSITIVO_SEM_CHAVE' });
+    return res.status(401).json({ erro: NAO_AUTENTICADO, codigo: 'DISPOSITIVO_SEM_CHAVE' });
   }
 
   try {
@@ -24,13 +30,9 @@ async function autenticarDispositivo(req, res, next) {
       [id]
     );
 
-    const esperado = rows.length && rows[0].chave_hash ? Buffer.from(rows[0].chave_hash.trim(), 'hex') : null;
-    const recebido = Buffer.from(hashChave(chave), 'hex');
-
-    // timingSafeEqual: não deixa o tempo de resposta revelar quanto da chave estava certo.
-    if (!esperado || esperado.length !== recebido.length || !crypto.timingSafeEqual(esperado, recebido)) {
+    if (!rows.length || !chaveConfere(chave, rows[0].chave_hash)) {
       console.warn(`[Dispositivo] Chave inválida para "${id}" (IP ${req.ip}).`);
-      return res.status(401).json({ erro: 'Dispositivo não autenticado.', codigo: 'DISPOSITIVO_CHAVE_INVALIDA' });
+      return res.status(401).json({ erro: NAO_AUTENTICADO, codigo: 'DISPOSITIVO_CHAVE_INVALIDA' });
     }
 
     req.dispositivo = { id: rows[0].id_dispositivo };
@@ -40,9 +42,8 @@ async function autenticarDispositivo(req, res, next) {
   }
 }
 
-// O session_id vira nome de pasta: só aceita letras, números, "-" e "_", e
-// tem que começar com o id do próprio dispositivo (ex.: "esp32cam-01-123456").
-// Assim uma câmera não escreve fora da pasta de frames nem na sessão de outra.
+// O session_id vira nome de pasta: o formato restrito e o prefixo do dispositivo impedem
+// que uma câmera escreva fora da pasta de frames ou na sessão de outra.
 function sessaoPertenceAoDispositivo(sessionId, idDispositivo) {
   return (
     typeof sessionId === 'string' &&

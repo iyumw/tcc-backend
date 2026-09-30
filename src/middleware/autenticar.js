@@ -7,7 +7,7 @@ function extrairToken(req, aceitarQuery) {
   return null;
 }
 
-function criar({ aceitarQuery = false } = {}) {
+function criarAutenticador({ aceitarQuery = false } = {}) {
   return async function autenticar(req, res, next) {
     try {
       const token = extrairToken(req, aceitarQuery);
@@ -26,5 +26,5 @@ function criar({ aceitarQuery = false } = {}) {
   };
 }
 
-module.exports = criar();
-module.exports.comQuery = criar({ aceitarQuery: true });
+module.exports = criarAutenticador();
+module.exports.comQuery = criarAutenticador({ aceitarQuery: true });

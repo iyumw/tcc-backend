@@ -1,22 +1,5 @@
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
@@ -46,7 +29,6 @@ app.post('/analisar', (req, res) => {
   console.log(`[IA mock] Recebida gravação ${id_gravacao} (tentativa ${req.body.tentativa}).`);
   res.status(202).json({ aceito: true });
 
-
   setTimeout(() => processar(req.body), ATRASO_MS);
 });
 
@@ -55,22 +37,16 @@ async function processar(pedido) {
   let resultado;
 
   try {
-
     const resposta = await fetch(pedido.video_url);
     if (!resposta.ok) throw new Error(`download do vídeo falhou: HTTP ${resposta.status}`);
     const video = Buffer.from(await resposta.arrayBuffer());
-
-
     const hash = crypto.createHash('sha256').update(video).digest('hex');
     if (hash !== pedido.hash_sha256) {
       throw new Error(`hash do vídeo baixado não confere (${hash})`);
     }
-
     if (Math.random() < CHANCE_FALHA) {
       throw new Error('falha simulada (IA_MOCK_FALHA)');
     }
-
-
     const duracao = pedido.duracao_segundos || 10;
     const score = Math.round(Math.random() * 10000) / 100;
     const veredicto = score >= 70 ? 'Alerta Alto' : score >= 40 ? 'Anomalia' : 'Normal';
@@ -93,9 +69,8 @@ async function processar(pedido) {
     resultado = { status: 'erro', erro: erro.message };
   }
 
-
   try {
-    const r = await fetch(pedido.callback_url, {
+    const resposta = await fetch(pedido.callback_url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${IA_CALLBACK_TOKEN}` },
       body: JSON.stringify(resultado),
@@ -103,7 +78,7 @@ async function processar(pedido) {
     console.log(
       `[IA mock] Gravação ${pedido.id_gravacao}: ${resultado.status}` +
         (resultado.veredicto ? ` (${resultado.veredicto}, ${resultado.score})` : ` (${resultado.erro})`) +
-        ` -> backend respondeu ${r.status}`
+        ` -> backend respondeu ${resposta.status}`
     );
   } catch (erro) {
     console.error(`[IA mock] Não consegui chamar o callback: ${erro.message}`);

@@ -17,8 +17,8 @@ async function buscarDaUsuaria(idGravacao, idVitima) {
 async function apagarArquivos(urls) {
   const falhas = [];
   for (const url of urls) {
-    const r = await storage.apagar(url);
-    if (!r.apagado) falhas.push({ arquivo: url, motivo: r.motivo });
+    const { apagado, motivo } = await storage.apagar(url);
+    if (!apagado) falhas.push({ arquivo: url, motivo });
   }
   return falhas;
 }

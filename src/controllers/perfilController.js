@@ -1,25 +1,32 @@
 const db = require('../config/db');
 const authService = require('../services/authService');
-const emailService = require('../services/emailService');
 const auditoria = require('../services/auditoriaService');
 const evidencias = require('../services/evidenciaService');
+const validacao = require('../utils/validacao');
 
 const CAMPOS_PERFIL = `id_vitima, nome, cpf, email, telefone, cep, logradouro, numero, complemento,
                        bairro, cidade, uf, consentimento_em, criada_em`;
+const FINALIDADES_DE_CODIGO = ['alterar_dados', 'excluir_conta'];
+const CAMPOS_ENDERECO_TEXTO = [['logradouro', 150], ['numero', 20], ['bairro', 100], ['cidade', 100]];
 
-function formatarPerfil(v, dispositivo) {
+function formatarPerfil(vitima, dispositivo) {
   return {
-    id_vitima: v.id_vitima,
-    nome: v.nome,
-    cpf_mascarado: `***.${v.cpf.slice(3, 6)}.${v.cpf.slice(6, 9)}-**`,
-    email: v.email,
-    telefone: v.telefone,
+    id_vitima: vitima.id_vitima,
+    nome: vitima.nome,
+    cpf_mascarado: `***.${vitima.cpf.slice(3, 6)}.${vitima.cpf.slice(6, 9)}-**`,
+    email: vitima.email,
+    telefone: vitima.telefone,
     endereco: {
-      cep: v.cep, logradouro: v.logradouro, numero: v.numero, complemento: v.complemento,
-      bairro: v.bairro, cidade: v.cidade, uf: v.uf,
+      cep: vitima.cep,
+      logradouro: vitima.logradouro,
+      numero: vitima.numero,
+      complemento: vitima.complemento,
+      bairro: vitima.bairro,
+      cidade: vitima.cidade,
+      uf: vitima.uf,
     },
-    consentimento_em: v.consentimento_em,
-    criada_em: v.criada_em,
+    consentimento_em: vitima.consentimento_em,
+    criada_em: vitima.criada_em,
     dispositivo: dispositivo || null,
   };
 }
@@ -27,13 +34,12 @@ function formatarPerfil(v, dispositivo) {
 async function carregarPerfil(idVitima) {
   const { rows } = await db.query(`SELECT ${CAMPOS_PERFIL} FROM vitima WHERE id_vitima = $1`, [idVitima]);
   if (!rows.length) return null;
-  const disp = await db.query(
+  const dispositivo = await db.query(
     'SELECT id_dispositivo, status_bateria FROM dispositivo WHERE id_vitima = $1',
     [idVitima]
   );
-  return formatarPerfil(rows[0], disp.rows[0]);
+  return formatarPerfil(rows[0], dispositivo.rows[0]);
 }
-
 
 async function obter(req, res, next) {
   try {
@@ -48,98 +54,110 @@ async function obter(req, res, next) {
 async function enviarCodigo(req, res, next) {
   try {
     const finalidade = req.body && req.body.finalidade;
-    if (!['alterar_dados', 'excluir_conta'].includes(finalidade)) {
+    if (!FINALIDADES_DE_CODIGO.includes(finalidade)) {
       return res.status(400).json({ erro: '"finalidade" deve ser "alterar_dados" ou "excluir_conta".' });
     }
     const { rows } = await db.query('SELECT email FROM vitima WHERE id_vitima = $1', [req.usuario.idVitima]);
-    const codigoMfa = await authService.criarCodigo(req.usuario.idVitima, finalidade);
-    await emailService.enviarCodigo(rows[0].email, codigoMfa.codigo, finalidade, codigoMfa.validadeMinutos);
-    return res.json({ mensagem: 'Enviamos um código para o seu e-mail.', validade_minutos: codigoMfa.validadeMinutos });
+    const { validadeMinutos } = await authService.enviarCodigo(req.usuario.idVitima, rows[0].email, finalidade);
+    return res.json({ mensagem: 'Enviamos um código para o seu e-mail.', validade_minutos: validadeMinutos });
   } catch (erro) {
     next(erro);
   }
 }
 
+function alteracoesDeEndereco(endereco, alterar, invalidos) {
+  if (endereco.cep !== undefined) {
+    const cep = validacao.somenteDigitos(endereco.cep);
+    if (cep.length !== 8) invalidos['endereco.cep'] = 'CEP inválido.';
+    else alterar('cep', cep);
+  }
+  for (const [campo, tamanhoMax] of CAMPOS_ENDERECO_TEXTO) {
+    if (endereco[campo] === undefined) continue;
+    const valor = validacao.texto(endereco[campo]);
+    if (!valor) invalidos[`endereco.${campo}`] = 'Campo obrigatório.';
+    else alterar(campo, valor.slice(0, tamanhoMax));
+  }
+  if (endereco.complemento !== undefined) {
+    alterar('complemento', validacao.texto(endereco.complemento).slice(0, 100) || null);
+  }
+  if (endereco.uf !== undefined) {
+    if (!validacao.ufValida(endereco.uf)) invalidos['endereco.uf'] = 'UF inválida.';
+    else alterar('uf', String(endereco.uf).toUpperCase());
+  }
+}
+
+async function lerAlteracoes(corpo) {
+  const colunas = {};
+  const invalidos = {};
+  const alterar = (coluna, valor) => { colunas[coluna] = valor; };
+
+  if (corpo.nome !== undefined) {
+    if (!validacao.nomeValido(corpo.nome)) invalidos.nome = 'Informe o nome completo.';
+    else alterar('nome', validacao.texto(corpo.nome).slice(0, 100));
+  }
+  if (corpo.endereco !== undefined) alteracoesDeEndereco(corpo.endereco || {}, alterar, invalidos);
+  if (corpo.email !== undefined) {
+    const email = validacao.normalizarEmail(corpo.email);
+    if (!validacao.emailValido(email)) invalidos.email = 'E-mail inválido.';
+    else alterar('email', email);
+  }
+  if (corpo.telefone !== undefined) {
+    const telefone = validacao.somenteDigitos(corpo.telefone);
+    if (!validacao.telefoneValido(telefone)) invalidos.telefone = 'Telefone inválido (DDD + número).';
+    else alterar('telefone', telefone);
+  }
+  if (corpo.nova_senha !== undefined) {
+    const faltaNaSenha = validacao.problemasDaSenha(corpo.nova_senha);
+    if (faltaNaSenha.length) invalidos.nova_senha = validacao.mensagemSenhaFraca(faltaNaSenha);
+    else alterar('senha_hash', await authService.gerarHashSenha(corpo.nova_senha));
+  }
+  return { colunas, invalidos };
+}
+
+function exigeCodigo(corpo) {
+  return corpo.email !== undefined || corpo.telefone !== undefined || corpo.nova_senha !== undefined;
+}
+
+function camposAlteradosParaAuditoria(corpo) {
+  const campos = Object.keys(corpo).filter((campo) => campo !== 'codigo' && campo !== 'nova_senha');
+  return corpo.nova_senha !== undefined ? [...campos, 'senha'] : campos;
+}
+
 async function atualizar(req, res, next) {
   try {
-    const b = req.body || {};
+    const corpo = req.body || {};
     const idVitima = req.usuario.idVitima;
-    const sets = [];
-    const valores = [];
-    const campos = {};
-    const add = (coluna, valor) => {
-      valores.push(valor);
-      sets.push(`${coluna} = $${valores.length + 1}`);
-    };
 
-    if (b.nome !== undefined) {
-      if (String(b.nome).trim().length < 3) campos.nome = 'Informe o nome completo.';
-      else add('nome', String(b.nome).trim().slice(0, 100));
-    }
-    if (b.endereco !== undefined) {
-      const e = b.endereco || {};
-      if (e.cep !== undefined) {
-        const cep = authService.somenteDigitos(e.cep);
-        if (cep.length !== 8) campos['endereco.cep'] = 'CEP inválido.';
-        else add('cep', cep);
-      }
-      for (const [c, max] of [['logradouro', 150], ['numero', 20], ['bairro', 100], ['cidade', 100]]) {
-        if (e[c] !== undefined) {
-          if (!String(e[c]).trim()) campos[`endereco.${c}`] = 'Campo obrigatório.';
-          else add(c, String(e[c]).trim().slice(0, max));
-        }
-      }
-      if (e.complemento !== undefined) add('complemento', e.complemento ? String(e.complemento).trim().slice(0, 100) : null);
-      if (e.uf !== undefined) {
-        if (!/^[A-Za-z]{2}$/.test(String(e.uf))) campos['endereco.uf'] = 'UF inválida.';
-        else add('uf', String(e.uf).toUpperCase());
-      }
-    }
+    const { colunas, invalidos } = await lerAlteracoes(corpo);
+    if (Object.keys(invalidos).length) return res.status(400).json({ erro: 'Verifique os campos.', campos: invalidos });
+    if (!Object.keys(colunas).length) return res.status(400).json({ erro: 'Nada para alterar.' });
 
-    const sensivel = b.email !== undefined || b.telefone !== undefined || b.nova_senha !== undefined;
-    let novoEmail = null;
-    if (b.email !== undefined) {
-      novoEmail = String(b.email).trim().toLowerCase();
-      if (!authService.emailValido(novoEmail)) campos.email = 'E-mail inválido.';
-      else add('email', novoEmail);
-    }
-    if (b.telefone !== undefined) {
-      const tel = authService.somenteDigitos(b.telefone);
-      if (tel.length < 10 || tel.length > 11) campos.telefone = 'Telefone inválido (DDD + número).';
-      else add('telefone', tel);
-    }
-    if (b.nova_senha !== undefined) {
-      const falta = authService.problemasDaSenha(b.nova_senha);
-      if (falta.length) campos.nova_senha = `A senha precisa ter: ${falta.join(', ')}.`;
-      else add('senha_hash', await authService.gerarHashSenha(b.nova_senha));
-    }
-
-    if (Object.keys(campos).length) return res.status(400).json({ erro: 'Verifique os campos.', campos });
-    if (!sets.length) return res.status(400).json({ erro: 'Nada para alterar.' });
-
-    if (sensivel) {
-      const r = await authService.conferirCodigo({ idVitima, finalidade: 'alterar_dados', codigo: b.codigo });
-      if (!r.ok) {
+    if (exigeCodigo(corpo)) {
+      const resultado = await authService.conferirCodigo({ idVitima, finalidade: 'alterar_dados', codigo: corpo.codigo });
+      if (!resultado.ok) {
         return res.status(401).json({
-          erro: `Alterar e-mail, telefone ou senha exige o código enviado por e-mail. ${r.erro}`,
+          erro: `Alterar e-mail, telefone ou senha exige o código enviado por e-mail. ${resultado.erro}`,
           codigo: 'MFA_OBRIGATORIO',
         });
       }
     }
 
-    if (novoEmail) {
-      const dup = await db.query('SELECT 1 FROM vitima WHERE email = $1 AND id_vitima <> $2', [novoEmail, idVitima]);
-      if (dup.rows.length) return res.status(409).json({ erro: 'E-mail já cadastrado.', campos: { email: 'E-mail já cadastrado.' } });
+    if (colunas.email) {
+      const duplicado = await db.query('SELECT 1 FROM vitima WHERE email = $1 AND id_vitima <> $2', [colunas.email, idVitima]);
+      if (duplicado.rows.length) {
+        return res.status(409).json({ erro: 'E-mail já cadastrado.', campos: { email: 'E-mail já cadastrado.' } });
+      }
     }
 
-    await db.query(`UPDATE vitima SET ${sets.join(', ')} WHERE id_vitima = $1`, [idVitima, ...valores]);
-    if (b.nova_senha !== undefined) {
+    const nomes = Object.keys(colunas);
+    const atribuicoes = nomes.map((coluna, i) => `${coluna} = $${i + 2}`).join(', ');
+    await db.query(`UPDATE vitima SET ${atribuicoes} WHERE id_vitima = $1`, [idVitima, ...Object.values(colunas)]);
 
-      await authService.encerrarTodasSessoes(idVitima, req.usuario.idSessao);
-    }
+    if (colunas.senha_hash) await authService.encerrarTodasSessoes(idVitima, req.usuario.idSessao);
+
     await auditoria.registrar('perfil_alterado', {
       idVitima,
-      detalhes: { campos: Object.keys(b).filter((k) => k !== 'codigo' && k !== 'nova_senha').concat(b.nova_senha !== undefined ? ['senha'] : []) },
+      detalhes: { campos: camposAlteradosParaAuditoria(corpo) },
       req,
     });
 
@@ -151,23 +169,23 @@ async function atualizar(req, res, next) {
 
 async function vincularDispositivo(req, res, next) {
   try {
-    const id = String((req.body && req.body.id_dispositivo) || '').trim();
-    if (!id) return res.status(400).json({ erro: '"id_dispositivo" é obrigatório.' });
+    const idVitima = req.usuario.idVitima;
+    const idDispositivo = validacao.texto(req.body && req.body.id_dispositivo);
+    if (!idDispositivo) return res.status(400).json({ erro: '"id_dispositivo" é obrigatório.' });
 
-    const atual = await db.query('SELECT id_dispositivo FROM dispositivo WHERE id_vitima = $1', [req.usuario.idVitima]);
-    if (atual.rows.length) {
-      return res.status(409).json({ erro: `Sua conta já está vinculada ao dispositivo ${atual.rows[0].id_dispositivo}.` });
+    const vinculoAtual = await db.query('SELECT id_dispositivo FROM dispositivo WHERE id_vitima = $1', [idVitima]);
+    if (vinculoAtual.rows.length) {
+      return res.status(409).json({ erro: `Sua conta já está vinculada ao dispositivo ${vinculoAtual.rows[0].id_dispositivo}.` });
     }
 
     const { rowCount } = await db.query(
       'UPDATE dispositivo SET id_vitima = $2 WHERE id_dispositivo = $1 AND id_vitima IS NULL',
-      [id, req.usuario.idVitima]
+      [idDispositivo, idVitima]
     );
-    if (!rowCount) {
-      return res.status(404).json({ erro: 'Dispositivo não encontrado ou já vinculado a outra conta.' });
-    }
-    await auditoria.registrar('dispositivo_vinculado', { idVitima: req.usuario.idVitima, detalhes: { id_dispositivo: id }, req });
-    return res.json(await carregarPerfil(req.usuario.idVitima));
+    if (!rowCount) return res.status(404).json({ erro: 'Dispositivo não encontrado ou já vinculado a outra conta.' });
+
+    await auditoria.registrar('dispositivo_vinculado', { idVitima, detalhes: { id_dispositivo: idDispositivo }, req });
+    return res.json(await carregarPerfil(idVitima));
   } catch (erro) {
     next(erro);
   }
@@ -176,8 +194,12 @@ async function vincularDispositivo(req, res, next) {
 async function excluirConta(req, res, next) {
   try {
     const idVitima = req.usuario.idVitima;
-    const r = await authService.conferirCodigo({ idVitima, finalidade: 'excluir_conta', codigo: req.body && req.body.codigo });
-    if (!r.ok) return res.status(401).json({ erro: r.erro, codigo: 'MFA_OBRIGATORIO' });
+    const resultado = await authService.conferirCodigo({
+      idVitima,
+      finalidade: 'excluir_conta',
+      codigo: req.body && req.body.codigo,
+    });
+    if (!resultado.ok) return res.status(401).json({ erro: resultado.erro, codigo: 'MFA_OBRIGATORIO' });
 
     const { rows: gravacoes } = await db.query(
       `SELECT g.id_gravacao, g.url_storage, g.processo_judicial
@@ -185,23 +207,25 @@ async function excluirConta(req, res, next) {
         WHERE a.id_vitima = $1`,
       [idVitima]
     );
-    const vinculadas = gravacoes.filter((g) => g.processo_judicial);
+    const vinculadas = gravacoes.filter((gravacao) => gravacao.processo_judicial);
     if (vinculadas.length) {
       return res.status(409).json({
         erro: 'A conta tem evidências vinculadas a processo judicial ativo e não pode ser excluída agora.',
-        gravacoes_vinculadas: vinculadas.map((g) => g.id_gravacao),
+        gravacoes_vinculadas: vinculadas.map((gravacao) => gravacao.id_gravacao),
       });
     }
 
     await db.query('DELETE FROM vitima WHERE id_vitima = $1', [idVitima]);
-    const falhas = await evidencias.apagarArquivos(gravacoes.map((g) => g.url_storage));
+    const falhas = await evidencias.apagarArquivos(gravacoes.map((gravacao) => gravacao.url_storage));
 
     await auditoria.registrar('conta_excluida', {
       idVitima,
       detalhes: { gravacoes_excluidas: gravacoes.length, arquivos_nao_apagados: falhas },
       req,
     });
-    if (falhas.length) console.warn(`[Perfil] Conta ${idVitima} excluída, mas ${falhas.length} arquivo(s) não foram apagados:`, falhas);
+    if (falhas.length) {
+      console.warn(`[Perfil] Conta ${idVitima} excluída, mas ${falhas.length} arquivo(s) não foram apagados:`, falhas);
+    }
 
     return res.status(204).end();
   } catch (erro) {

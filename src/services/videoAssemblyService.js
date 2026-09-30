@@ -14,23 +14,24 @@ function lerFrames(pastaFrames) {
   return fs
     .readdirSync(pastaFrames)
     .map((nome) => {
-      const m = PADRAO_NOME.exec(nome);
-      if (!m) return null;
+      const partes = PADRAO_NOME.exec(nome);
+      if (!partes) return null;
       return {
         nome,
-        indice: Number(m[1]),
-        tMs: m[2] !== undefined ? Number(m[2]) : null,
+        indice: Number(partes[1]),
+        tempoCapturaMs: partes[2] !== undefined ? Number(partes[2]) : null,
       };
     })
     .filter(Boolean)
     .sort((a, b) => a.indice - b.indice);
 }
 
+// Cada frame dura até a captura do próximo, para o vídeo sair na velocidade real.
 function calcularDuracoes(frames) {
   const intervalos = [];
   for (let i = 0; i < frames.length - 1; i++) {
-    const atual = frames[i].tMs;
-    const proximo = frames[i + 1].tMs;
+    const atual = frames[i].tempoCapturaMs;
+    const proximo = frames[i + 1].tempoCapturaMs;
     if (atual !== null && proximo !== null && proximo > atual) {
       intervalos.push(proximo - atual);
     } else {
@@ -38,16 +39,18 @@ function calcularDuracoes(frames) {
     }
   }
 
-  const conhecidos = intervalos.filter((v) => v !== null).sort((a, b) => a - b);
+  const conhecidos = intervalos.filter((intervalo) => intervalo !== null).sort((a, b) => a - b);
   const mediana = conhecidos.length ? conhecidos[Math.floor(conhecidos.length / 2)] : INTERVALO_PADRAO_MS;
   intervalos.push(mediana);
 
-  return intervalos.map((ms) => {
-    const valor = ms === null ? mediana : ms;
+  return intervalos.map((intervaloMs) => {
+    const valor = intervaloMs === null ? mediana : intervaloMs;
     return Math.min(Math.max(valor, DURACAO_MIN_MS), DURACAO_MAX_MS) / 1000;
   });
 }
 
+// Lista explícita (concat demuxer) porque a numeração pode ter buracos e o
+// "-pattern_type glob" não funciona no ffmpeg do Windows.
 function montarVideoAPartirDeFrames(pastaFrames, caminhoSaida) {
   return new Promise((resolve, reject) => {
     const frames = lerFrames(pastaFrames);
@@ -57,14 +60,10 @@ function montarVideoAPartirDeFrames(pastaFrames, caminhoSaida) {
     }
 
     const duracoes = calcularDuracoes(frames);
-    const duracaoSegundos = Math.round(duracoes.reduce((soma, d) => soma + d, 0) * 1000) / 1000;
+    const duracaoSegundos = Math.round(duracoes.reduce((soma, duracao) => soma + duracao, 0) * 1000) / 1000;
 
-    const linhas = [];
-    frames.forEach((frame, i) => {
-      linhas.push(`file '${frame.nome}'`);
-      linhas.push(`duration ${duracoes[i].toFixed(3)}`);
-    });
-
+    const linhas = frames.flatMap((frame, i) => [`file '${frame.nome}'`, `duration ${duracoes[i].toFixed(3)}`]);
+    // O concat ignora a duração do último arquivo se ele não for repetido no fim.
     linhas.push(`file '${frames[frames.length - 1].nome}'`);
 
     const listaFrames = path.join(pastaFrames, 'frames.txt');

@@ -4,9 +4,10 @@ const autenticar = require('../middleware/autenticar');
 
 const router = express.Router();
 
-// O SSE usa token via querystring; o restante da API usa Bearer.
+// O EventSource do navegador não manda cabeçalhos, então o SSE recebe o token na URL.
 router.get('/eventos', autenticar.comQuery, evidenciaController.eventosSse);
 
+// Sem login: protegido pela assinatura do link (ver storageService).
 router.get('/:id/arquivo', evidenciaController.servirArquivoLocal);
 
 router.use(autenticar);

@@ -1,12 +1,12 @@
 const crypto = require('crypto');
 const { promisify } = require('util');
 const db = require('../config/db');
+const emailService = require('./emailService');
 
 const scrypt = promisify(crypto.scrypt);
 
 const INATIVIDADE_MIN = Number(process.env.SESSAO_INATIVIDADE_MINUTOS) || 15;
 const SESSAO_MAX_HORAS = Number(process.env.SESSAO_MAX_HORAS) || 8;
-
 const MFA_VALIDADE_MIN = 5;
 const MFA_MAX_TENTATIVAS = 5;
 
@@ -22,6 +22,8 @@ async function gerarHashSenha(senha) {
   return `scrypt$${salt.toString('hex')}$${hash.toString('hex')}`;
 }
 
+// Usado quando o e-mail não existe, para o login levar o mesmo tempo e não
+// revelar quais e-mails estão cadastrados.
 const HASH_FALSO = 'scrypt$' + '00'.repeat(16) + '$' + '00'.repeat(64);
 
 async function conferirSenha(senha, senhaHash) {
@@ -32,45 +34,14 @@ async function conferirSenha(senha, senhaHash) {
   return crypto.timingSafeEqual(esperado, calculado) && Boolean(senhaHash);
 }
 
-function problemasDaSenha(senha) {
-  const s = String(senha || '');
-  const faltando = [];
-  if (s.length < 8) faltando.push('pelo menos 8 caracteres');
-  if (!/[A-Z]/.test(s)) faltando.push('uma letra maiúscula');
-  if (!/[a-z]/.test(s)) faltando.push('uma letra minúscula');
-  if (!/[0-9]/.test(s)) faltando.push('um número');
-  if (!/[^A-Za-z0-9]/.test(s)) faltando.push('um caractere especial');
-  return faltando;
-}
-
-function somenteDigitos(valor) {
-  return String(valor || '').replace(/\D/g, '');
-}
-
-function cpfValido(cpf) {
-  const d = somenteDigitos(cpf);
-  if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
-  const digito = (base) => {
-    let soma = 0;
-    for (let i = 0; i < base.length; i++) soma += Number(base[i]) * (base.length + 1 - i);
-    const resto = (soma * 10) % 11;
-    return resto === 10 ? 0 : resto;
-  };
-  return digito(d.slice(0, 9)) === Number(d[9]) && digito(d.slice(0, 10)) === Number(d[10]);
-}
-
-function emailValido(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || ''));
-}
-
-function base64url(dados) {
-  return Buffer.from(dados).toString('base64url');
+function assinarHmac(conteudo) {
+  return crypto.createHmac('sha256', JWT_SECRET).update(conteudo).digest();
 }
 
 function assinarJwt(payload) {
-  const cabecalho = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const corpo = base64url(JSON.stringify(payload));
-  const assinatura = crypto.createHmac('sha256', JWT_SECRET).update(`${cabecalho}.${corpo}`).digest('base64url');
+  const cabecalho = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const corpo = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const assinatura = assinarHmac(`${cabecalho}.${corpo}`).toString('base64url');
   return `${cabecalho}.${corpo}.${assinatura}`;
 }
 
@@ -78,13 +49,12 @@ function lerJwt(token) {
   const partes = String(token || '').split('.');
   if (partes.length !== 3) return null;
   const [cabecalho, corpo, assinatura] = partes;
-  const esperada = crypto.createHmac('sha256', JWT_SECRET).update(`${cabecalho}.${corpo}`).digest();
+  const esperada = assinarHmac(`${cabecalho}.${corpo}`);
   const recebida = Buffer.from(assinatura, 'base64url');
   if (esperada.length !== recebida.length || !crypto.timingSafeEqual(esperada, recebida)) return null;
   try {
     const payload = JSON.parse(Buffer.from(corpo, 'base64url').toString('utf8'));
-    if (!payload.exp || payload.exp * 1000 < Date.now()) return null;
-    return payload;
+    return payload.exp && payload.exp * 1000 >= Date.now() ? payload : null;
   } catch {
     return null;
   }
@@ -117,26 +87,25 @@ async function validarSessao(token) {
        FROM sessao WHERE id_sessao = $1`,
     [payload.sid, INATIVIDADE_MIN]
   );
-  const s = rows[0];
-  if (!s || s.encerrada_em) return { erro: 'Sessão encerrada.', codigo: 'SESSAO_ENCERRADA' };
-  if (new Date(s.expira_em) < new Date()) return { erro: 'Sessão expirada.', codigo: 'SESSAO_EXPIRADA' };
-  if (s.inativa) {
-    await db.query(`UPDATE sessao SET encerrada_em = NOW() WHERE id_sessao = $1`, [payload.sid]);
-    return {
-      erro: `Sessão encerrada por inatividade (${INATIVIDADE_MIN} min).`,
-      codigo: 'SESSAO_INATIVA',
-    };
+  const sessao = rows[0];
+  if (!sessao || sessao.encerrada_em) return { erro: 'Sessão encerrada.', codigo: 'SESSAO_ENCERRADA' };
+  if (new Date(sessao.expira_em) < new Date()) return { erro: 'Sessão expirada.', codigo: 'SESSAO_EXPIRADA' };
+  if (sessao.inativa) {
+    await encerrarSessao(payload.sid);
+    return { erro: `Sessão encerrada por inatividade (${INATIVIDADE_MIN} min).`, codigo: 'SESSAO_INATIVA' };
   }
 
+  // Grava o último acesso no máximo a cada 30 s, para não escrever no banco a cada requisição.
   await db.query(
     `UPDATE sessao SET ultimo_acesso = NOW()
       WHERE id_sessao = $1 AND ultimo_acesso < NOW() - INTERVAL '30 seconds'`,
     [payload.sid]
   );
 
-  return { idVitima: s.id_vitima, idSessao: payload.sid };
+  return { idVitima: sessao.id_vitima, idSessao: payload.sid };
 }
 
+// Não renova o último acesso: usado pela conexão SSE, que fica aberta sozinha.
 async function sessaoAindaValida(idSessao) {
   const { rows } = await db.query(
     `SELECT 1 FROM sessao
@@ -179,9 +148,16 @@ async function criarCodigo(idVitima, finalidade) {
   return { idCodigo, codigo, validadeMinutos: MFA_VALIDADE_MIN };
 }
 
+async function enviarCodigo(idVitima, email, finalidade) {
+  const { idCodigo, codigo, validadeMinutos } = await criarCodigo(idVitima, finalidade);
+  await emailService.enviarCodigo(email, codigo, finalidade, validadeMinutos);
+  return { idCodigo, validadeMinutos };
+}
+
+// Busca pelo id do código (login) ou pelo último código da usuária para a finalidade.
 async function conferirCodigo({ idCodigo = null, idVitima = null, finalidade, codigo }) {
   const { rows } = await db.query(
-    `SELECT id_codigo, id_vitima, tentativas, usado_em, expira_em < NOW() AS expirado
+    `SELECT id_codigo, id_vitima, codigo_hash, tentativas, usado_em, expira_em < NOW() AS expirado
        FROM codigo_mfa
       WHERE finalidade = $1
         AND ($2::uuid IS NULL OR id_codigo = $2::uuid)
@@ -190,40 +166,33 @@ async function conferirCodigo({ idCodigo = null, idVitima = null, finalidade, co
       LIMIT 1`,
     [finalidade, idCodigo, idVitima]
   );
-  const d = rows[0];
-  if (!d || d.usado_em) return { ok: false, erro: 'Código inválido. Peça um novo código.' };
-  if (d.expirado) return { ok: false, erro: 'Código expirado. Peça um novo código.' };
-  if (d.tentativas >= MFA_MAX_TENTATIVAS) {
-    return { ok: false, erro: 'Muitas tentativas. Peça um novo código.' };
-  }
+  const registro = rows[0];
+  if (!registro || registro.usado_em) return { ok: false, erro: 'Código inválido. Peça um novo código.' };
+  if (registro.expirado) return { ok: false, erro: 'Código expirado. Peça um novo código.' };
+  if (registro.tentativas >= MFA_MAX_TENTATIVAS) return { ok: false, erro: 'Muitas tentativas. Peça um novo código.' };
 
-  const recebido = Buffer.from(hashCodigo(d.id_codigo, String(codigo || '').trim()));
-  const esperado = Buffer.from(
-    (await db.query('SELECT codigo_hash FROM codigo_mfa WHERE id_codigo = $1', [d.id_codigo])).rows[0].codigo_hash
-  );
+  const recebido = Buffer.from(hashCodigo(registro.id_codigo, String(codigo || '').trim()));
+  const esperado = Buffer.from(registro.codigo_hash);
   if (!crypto.timingSafeEqual(recebido, esperado)) {
-    await db.query('UPDATE codigo_mfa SET tentativas = tentativas + 1 WHERE id_codigo = $1', [d.id_codigo]);
-    const restantes = MFA_MAX_TENTATIVAS - d.tentativas - 1;
-    return { ok: false, erro: `Código incorreto. ${restantes > 0 ? `${restantes} tentativa(s) restante(s).` : 'Peça um novo código.'}` };
+    await db.query('UPDATE codigo_mfa SET tentativas = tentativas + 1 WHERE id_codigo = $1', [registro.id_codigo]);
+    const restantes = MFA_MAX_TENTATIVAS - registro.tentativas - 1;
+    const dica = restantes > 0 ? `${restantes} tentativa(s) restante(s).` : 'Peça um novo código.';
+    return { ok: false, erro: `Código incorreto. ${dica}` };
   }
 
-  await db.query('UPDATE codigo_mfa SET usado_em = NOW() WHERE id_codigo = $1', [d.id_codigo]);
-  return { ok: true, idVitima: d.id_vitima };
+  await db.query('UPDATE codigo_mfa SET usado_em = NOW() WHERE id_codigo = $1', [registro.id_codigo]);
+  return { ok: true, idVitima: registro.id_vitima };
 }
 
 module.exports = {
   INATIVIDADE_MIN,
   gerarHashSenha,
   conferirSenha,
-  problemasDaSenha,
-  somenteDigitos,
-  cpfValido,
-  emailValido,
   criarSessao,
   validarSessao,
   sessaoAindaValida,
   encerrarSessao,
   encerrarTodasSessoes,
-  criarCodigo,
+  enviarCodigo,
   conferirCodigo,
 };

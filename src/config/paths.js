@@ -5,7 +5,6 @@ const RAIZ_TMP = path.join(__dirname, '..', '..', 'tmp');
 const FRAMES_DIR = path.join(RAIZ_TMP, 'frames');
 const VIDEOS_DIR = path.join(RAIZ_TMP, 'videos');
 
-// Garante os diretórios temporários usados para frames e vídeos.
 function garantirPastas() {
   fs.mkdirSync(FRAMES_DIR, { recursive: true });
   fs.mkdirSync(VIDEOS_DIR, { recursive: true });

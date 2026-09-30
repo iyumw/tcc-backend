@@ -135,6 +135,8 @@ Cada grupo de rotas tem um arquivo de rotas e um controller com o mesmo nome:
 
 A regra de negócio fica em `src/services/` (um arquivo por assunto:
 `storageService`, `pipelineIAService`, `authService`, `custodiaService`...).
+Validações e helpers usados em vários lugares (CPF, e-mail, senha, ids)
+ficam em `src/utils/`.
 
 ### `GET /health`
 Health check simples.

@@ -1,4 +1,3 @@
-
 const express = require('express');
 const iaController = require('../controllers/iaController');
 const { autenticarCallback } = require('../services/pipelineIAService');
