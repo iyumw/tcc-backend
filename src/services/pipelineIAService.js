@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const path = require('path');
 const db = require('../config/db');
 const storage = require('./storageService');
 const eventos = require('./eventosService');
@@ -20,6 +21,8 @@ const VALIDADE_URL_IA_MIN = 60;
 const PRAZO_RN16_FRACAO_DA_DURACAO = 0.5;
 
 const VEREDICTOS = ['Alerta Alto', 'Anomalia', 'Normal'];
+const NIVEIS_LINHA_DO_TEMPO = ['normal', 'alerta', 'critico'];
+const TIMEOUT_LAUDO_PDF_MS = 120000;
 
 function iaConfigurada() {
   return Boolean(IA_SERVICE_URL);
@@ -133,23 +136,58 @@ async function solicitarAnalise(idGravacao) {
   }
 }
 
+function lerIntervalo(item, campo, i) {
+  const inicio = Number(item && item.inicio_s);
+  const fim = Number(item && item.fim_s);
+  if (!Number.isFinite(inicio) || !Number.isFinite(fim) || inicio < 0 || fim < inicio) {
+    throw erroHttp(400, `${campo}[${i}]: "inicio_s" e "fim_s" devem ser números, com inicio_s <= fim_s.`);
+  }
+  return { inicio_s: inicio, fim_s: fim };
+}
+
+function lerNumeroOpcional(item, chave, campo, i) {
+  if (item[chave] === undefined || item[chave] === null) return undefined;
+  const valor = Number(item[chave]);
+  if (!Number.isFinite(valor) || valor < 0) throw erroHttp(400, `${campo}[${i}].${chave} deve ser um número >= 0.`);
+  return valor;
+}
+
 function validarSegmentos(segmentos) {
   if (segmentos === undefined || segmentos === null) return [];
   if (!Array.isArray(segmentos)) throw erroHttp(400, '"segmentos_criticos" deve ser uma lista.');
 
   return segmentos.map((segmentoRecebido, i) => {
-    const inicio = Number(segmentoRecebido && segmentoRecebido.inicio_s);
-    const fim = Number(segmentoRecebido && segmentoRecebido.fim_s);
-    if (!Number.isFinite(inicio) || !Number.isFinite(fim) || inicio < 0 || fim < inicio) {
-      throw erroHttp(400, `segmentos_criticos[${i}]: "inicio_s" e "fim_s" devem ser números, com inicio_s <= fim_s.`);
-    }
-    const segmento = { inicio_s: inicio, fim_s: fim };
+    const segmento = lerIntervalo(segmentoRecebido, 'segmentos_criticos', i);
     if (segmentoRecebido.score !== undefined) {
       const score = Number(segmentoRecebido.score);
       if (!ehPercentual(score)) throw erroHttp(400, `segmentos_criticos[${i}].score deve estar entre 0 e 100.`);
       segmento.score = score;
     }
+    const pico = lerNumeroOpcional(segmentoRecebido, 'pico_s', 'segmentos_criticos', i);
+    if (pico !== undefined) segmento.pico_s = pico;
     return segmento;
+  });
+}
+
+// Uma entrada por segundo do vídeo, para o gráfico do front. Opcional: IA antiga não manda.
+function validarLinhaDoTempo(linhaDoTempo) {
+  if (linhaDoTempo === undefined || linhaDoTempo === null) return null;
+  if (!Array.isArray(linhaDoTempo)) throw erroHttp(400, '"linha_do_tempo" deve ser uma lista.');
+
+  return linhaDoTempo.map((itemRecebido, i) => {
+    const item = lerIntervalo(itemRecebido, 'linha_do_tempo', i);
+    const score = Number(itemRecebido.score);
+    if (!ehPercentual(score)) throw erroHttp(400, `linha_do_tempo[${i}].score deve estar entre 0 e 100.`);
+    if (!NIVEIS_LINHA_DO_TEMPO.includes(itemRecebido.nivel)) {
+      throw erroHttp(400, `linha_do_tempo[${i}].nivel deve ser um de: ${NIVEIS_LINHA_DO_TEMPO.join(', ')}.`);
+    }
+    item.score = score;
+    const scoreFrame = lerNumeroOpcional(itemRecebido, 'score_frame', 'linha_do_tempo', i);
+    if (scoreFrame !== undefined) item.score_frame = scoreFrame;
+    const pico = lerNumeroOpcional(itemRecebido, 'pico_s', 'linha_do_tempo', i);
+    if (pico !== undefined) item.pico_s = pico;
+    item.nivel = itemRecebido.nivel;
+    return item;
   });
 }
 
@@ -163,11 +201,13 @@ function validarResultadoConcluido(dados) {
     throw erroHttp(400, '"versao_modelo" é obrigatório (RN07).');
   }
   const segmentos = validarSegmentos(dados.segmentos_criticos);
+  const linhaDoTempo = validarLinhaDoTempo(dados.linha_do_tempo);
   const tempoMs = Math.round(Number(dados.tempo_processamento_ms));
   return {
     score,
     veredicto: dados.veredicto,
     segmentos,
+    linhaDoTempo,
     versaoModelo: dados.versao_modelo.slice(0, 100),
     tempoMs: dados.tempo_processamento_ms !== undefined && Number.isFinite(tempoMs) ? tempoMs : null,
   };
@@ -215,11 +255,15 @@ async function registrarResultado(idGravacao, dados) {
 
     const resultado = validarResultadoConcluido(dados);
     const analise = await cliente.query(
-      `INSERT INTO analise_ia (id_gravacao, score, veredicto, segmentos_criticos, versao_modelo, tempo_processamento_ms)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO analise_ia (id_gravacao, score, veredicto, segmentos_criticos, linha_do_tempo,
+                               versao_modelo, tempo_processamento_ms, resultado_ia)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id_analise`,
       [idGravacao, resultado.score, resultado.veredicto, JSON.stringify(resultado.segmentos),
-       resultado.versaoModelo, resultado.tempoMs]
+       resultado.linhaDoTempo && JSON.stringify(resultado.linhaDoTempo),
+       resultado.versaoModelo, resultado.tempoMs,
+       // O JSON do callback do jeito que chegou: o código de verificação do PDF é o hash dele.
+       JSON.stringify(dados)]
     );
     await cliente.query(
       `UPDATE gravacao
@@ -269,6 +313,7 @@ function montarLaudo(analise) {
     veredicto: analise.veredicto,
     indice_probabilidade: Number(analise.score),
     segmentos_criticos: analise.segmentos_criticos,
+    linha_do_tempo: analise.linha_do_tempo,
     algoritmo_versao: analise.versao_modelo,
     duracao_video_segundos: duracao,
     tempo_processamento_ms: analise.tempo_processamento_ms,
@@ -283,7 +328,7 @@ async function consultarAnalise(idGravacao) {
             g.tentativas_analise, g.ultimo_erro_analise, g.analise_atualizada_em,
             a.id_device,
             ia.id_analise, ia.score, ia.veredicto, ia.segmentos_criticos, ia.versao_modelo,
-            ia.tempo_processamento_ms, ia.concluida_em
+            ia.tempo_processamento_ms, ia.concluida_em, ia.linha_do_tempo
        FROM gravacao g
        JOIN acionamento a ON a.id_acionamento = g.id_acionamento
        LEFT JOIN analise_ia ia ON ia.id_gravacao = g.id_gravacao
@@ -345,8 +390,70 @@ function iniciarVerificacaoPeriodica() {
   console.log(`[PipelineIA] Serviço de IA: ${IA_SERVICE_URL} (verificação a cada ${INTERVALO_VERIFICACAO_MS / 1000} s).`);
 }
 
+function formatarDataHora(data) {
+  return new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    dateStyle: 'short',
+    timeStyle: 'medium',
+  }).format(new Date(data));
+}
+
+// Pede à IA o laudo em PDF ("Download de Segurança"). Devolve { pdf, codigoVerificacao }
+// ou lança erroHttp com o motivo (laudo não pronto, hash não confere, IA fora do ar).
+async function gerarLaudoPdf(gravacao) {
+  if (!iaConfigurada()) throw erroHttp(503, 'Serviço de IA não configurado.');
+
+  const { rows } = await db.query('SELECT resultado_ia FROM analise_ia WHERE id_gravacao = $1', [gravacao.id_gravacao]);
+  if (!rows.length) throw erroHttp(409, 'O laudo ainda não está pronto.');
+  if (!rows[0].resultado_ia) throw erroHttp(409, 'Esta análise é anterior ao laudo em PDF. Peça uma nova análise.');
+
+  const acesso = await storage.gerarUrlAssinada(gravacao.id_gravacao, gravacao.url_storage, baseUrlPublica(), VALIDADE_URL_IA_MIN);
+  const pedido = {
+    resultado: rows[0].resultado_ia,
+    metadados: {
+      id_gravacao: gravacao.id_gravacao,
+      arquivo: path.basename(gravacao.url_storage),
+      data_gravacao: formatarDataHora(gravacao.data_hora),
+      dispositivo: gravacao.id_device,
+      duracao_s: numeroOuNulo(gravacao.duracao_segundos),
+      hash_sha256: gravacao.hash_seguranca.trim(),
+    },
+    video_url: acesso.url,
+  };
+
+  let resposta;
+  try {
+    resposta = await fetch(`${IA_SERVICE_URL}/laudo`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(IA_TOKEN ? { Authorization: `Bearer ${IA_TOKEN}` } : {}),
+      },
+      body: JSON.stringify(pedido),
+      signal: AbortSignal.timeout(TIMEOUT_LAUDO_PDF_MS),
+    });
+  } catch (erro) {
+    console.error(`[PipelineIA] Laudo PDF da gravação ${gravacao.id_gravacao}: ${descreverFalhaDeEnvio(erro)}`);
+    throw erroHttp(502, 'O serviço de IA não respondeu. Tente de novo em instantes.');
+  }
+
+  if (resposta.status === 409) {
+    throw erroHttp(409, 'O vídeo guardado não confere com o hash registrado; o laudo não foi gerado.');
+  }
+  if (!resposta.ok) {
+    console.error(`[PipelineIA] Laudo PDF da gravação ${gravacao.id_gravacao}: IA respondeu HTTP ${resposta.status}`);
+    throw erroHttp(502, 'O serviço de IA não conseguiu gerar o laudo. Tente de novo em instantes.');
+  }
+
+  return {
+    pdf: Buffer.from(await resposta.arrayBuffer()),
+    codigoVerificacao: resposta.headers.get('x-codigo-verificacao'),
+  };
+}
+
 module.exports = {
   iaConfigurada,
+  gerarLaudoPdf,
   solicitarAnalise,
   registrarResultado,
   autenticarCallback,

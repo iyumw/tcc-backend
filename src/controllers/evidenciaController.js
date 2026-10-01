@@ -184,6 +184,27 @@ async function baixarLaudo(req, res, next) {
   }
 }
 
+// "Download de Segurança": o PDF é gerado pelo serviço de IA a partir do resultado guardado.
+async function baixarLaudoPdf(req, res, next) {
+  try {
+    const gravacao = await gravacaoDaUsuaria(req, res, 'download_laudo_pdf');
+    if (!gravacao) return;
+    const { pdf, codigoVerificacao } = await pipelineIA.gerarLaudoPdf(gravacao);
+
+    await auditoria.registrar('download_laudo_pdf', {
+      idVitima: req.usuario.idVitima,
+      detalhes: { id_gravacao: gravacao.id_gravacao, codigo_verificacao: codigoVerificacao },
+      req,
+    });
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', `attachment; filename="laudo_gravacao_${gravacao.id_gravacao}.pdf"`);
+    if (codigoVerificacao) res.set('X-Codigo-Verificacao', codigoVerificacao);
+    return res.send(pdf);
+  } catch (erro) {
+    next(erro);
+  }
+}
+
 async function reprocessar(req, res, next) {
   try {
     const gravacao = await gravacaoDaUsuaria(req, res, 'reprocessar');
@@ -298,6 +319,7 @@ module.exports = {
   gerarUrl,
   verificarIntegridade,
   baixarLaudo,
+  baixarLaudoPdf,
   reprocessar,
   excluir,
   eventosSse,

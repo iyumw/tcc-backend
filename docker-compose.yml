@@ -18,6 +18,7 @@ services:
       # Migrações posteriores ao schema.sql (também só na primeira criação)
       - ./src/db/migrations/003_autenticacao.sql:/docker-entrypoint-initdb.d/03-autenticacao.sql
       - ./src/db/migrations/005_chave_dispositivo.sql:/docker-entrypoint-initdb.d/05-chave-dispositivo.sql
+      - ./src/db/migrations/006_laudo_ia.sql:/docker-entrypoint-initdb.d/06-laudo-ia.sql
 
 volumes:
   safe_evidence_pgdata:

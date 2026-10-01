@@ -27,7 +27,7 @@ const origensPermitidas = (process.env.FRONT_URL || 'http://localhost:4200')
   .split(',')
   .map((origem) => origem.trim())
   .filter(Boolean);
-app.use(cors({ origin: origensPermitidas, exposedHeaders: ['Content-Disposition', 'X-Laudo-SHA256'] }));
+app.use(cors({ origin: origensPermitidas, exposedHeaders: ['Content-Disposition', 'X-Laudo-SHA256', 'X-Codigo-Verificacao'] }));
 app.use(express.json());
 
 app.use(morgan('dev'));

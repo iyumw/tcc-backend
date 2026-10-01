@@ -217,6 +217,23 @@ e no `.env`: `IA_SERVICE_URL=http://localhost:8090` e um
 `IA_CALLBACK_TOKEN` qualquer. Sem `IA_SERVICE_URL`, as análises ficam
 `Pendente` até o serviço ser configurado.
 
+O laudo em PDF ("Download de Segurança", `GET /api/evidencias/:id/laudo.pdf`)
+também é gerado pelo serviço de IA (`POST {IA_SERVICE_URL}/laudo`); a IA falsa
+devolve um PDF de teste. **Banco já existente:** rode a migração
+`006_laudo_ia.sql`.
+
+## Testando sem a câmera
+
+Para simular uma gravação (gera frames de teste com o ffmpeg, envia com a
+chave do dispositivo e encerra a sessão):
+
+```bash
+npm run simular-camera -- --chave <DEVICE_KEY>
+# opções: --url http://localhost:8080  --id esp32cam-01  --segundos 10
+```
+
+Funciona contra o backend local ou o da nuvem (`--url https://...`).
+
 ## Armazenamento (local ou AWS S3)
 
 Sem `S3_BUCKET` no `.env`, os vídeos ficam em `tmp/videos/`. Com ele,
