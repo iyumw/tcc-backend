@@ -166,18 +166,6 @@ que precisa já existir na tabela `dispositivo`).
 { "recebido": true, "frame_index": 0 }
 ```
 
-### `POST /api/captura/lote`
-Mesmo papel do `/upload`, mas com vários frames numa requisição só (até
-10). É o que o firmware usa: cada requisição HTTPS custa uma ida e volta
-até a AWS, então mandar 4 frames juntos rende mais fps. Multipart com
-`device_id`, `session_id` e uma parte `images` por frame, com o nome do
-arquivo no formato `<frame_index>_<t_captura_ms>.jpg` (ex.: `12_3480.jpg`).
-
-**Resposta (201):**
-```json
-{ "recebidos": 4 }
-```
-
 ### `POST /api/captura/sessao/encerrar`
 Chamado pela ESP32-CAM quando recebe o comando STOP do relógio.
 Responde na hora (`202`) e, em segundo plano, junta os frames daquela
@@ -196,8 +184,8 @@ apagados. O resultado aparece no log do backend e em `GET /api/evidencias`.
 { "session_id": "esp32cam-01-123456", "status": "processando" }
 ```
 
-**Erros possíveis (abrir, upload, lote e encerrar):**
-- `400` — campo obrigatório ausente, nome de arquivo inválido no lote, mais de 10 frames no lote, ou nenhum frame recebido pra sessão
+**Erros possíveis (abrir, upload e encerrar):**
+- `400` — campo obrigatório ausente, ou nenhum frame recebido pra sessão
 - `401` — sem chave do dispositivo, ou chave errada
 - `403` — `device_id` ou `session_id` de outro dispositivo
 - `404` — sessão não encontrada
