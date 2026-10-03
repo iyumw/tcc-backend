@@ -42,20 +42,49 @@ async function criarSessaoSeNova(idDispositivo, sessionId) {
   );
 }
 
+function removerArquivosRecebidos(req) {
+  const arquivos = req.files || (req.file ? [req.file] : []);
+  for (const arquivo of arquivos) fs.rmSync(arquivo.path, { force: true });
+}
+
+// Confere device_id e session_id do envio; se algo estiver errado, já responde e devolve false.
+function remetenteValido(req, res) {
+  const { device_id: idDispositivo, session_id: sessionId } = req.body || {};
+  if (!idDispositivo || !sessionId) {
+    removerArquivosRecebidos(req);
+    res.status(400).json({ erro: 'Campos "device_id" e "session_id" são obrigatórios.' });
+    return false;
+  }
+  if (idDispositivo !== req.dispositivo.id) {
+    removerArquivosRecebidos(req);
+    res.status(403).json({ erro: 'device_id diferente do dispositivo autenticado.' });
+    return false;
+  }
+  return true;
+}
+
 async function receberFrame(req, res, next) {
   try {
-    const { device_id: idDispositivo, session_id: sessionId, frame_index: frameIndex } = req.body || {};
-    if (!idDispositivo || !sessionId) {
-      return res.status(400).json({ erro: 'Campos "device_id" e "session_id" são obrigatórios.' });
-    }
-    if (idDispositivo !== req.dispositivo.id) {
-      if (req.file) fs.rmSync(req.file.path, { force: true });
-      return res.status(403).json({ erro: 'device_id diferente do dispositivo autenticado.' });
-    }
+    if (!remetenteValido(req, res)) return;
     if (!req.file) return res.status(400).json({ erro: 'Campo "image" (arquivo) é obrigatório.' });
 
-    await criarSessaoSeNova(idDispositivo, sessionId);
-    return res.status(201).json({ recebido: true, frame_index: Number(frameIndex) || 0 });
+    await criarSessaoSeNova(req.dispositivo.id, req.body.session_id);
+    return res.status(201).json({ recebido: true, frame_index: Number(req.body.frame_index) || 0 });
+  } catch (erro) {
+    next(erro);
+  }
+}
+
+// Vários frames numa requisição só: a câmera economiza uma ida e volta HTTPS por frame.
+async function receberLote(req, res, next) {
+  try {
+    if (!remetenteValido(req, res)) return;
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ erro: 'Campo "images" (arquivos) é obrigatório.' });
+    }
+
+    await criarSessaoSeNova(req.dispositivo.id, req.body.session_id);
+    return res.status(201).json({ recebidos: req.files.length });
   } catch (erro) {
     next(erro);
   }
@@ -122,5 +151,6 @@ async function finalizarGravacao(idAcionamento, sessionId, pastaFrames) {
 module.exports = {
   abrirSessao,
   receberFrame,
+  receberLote,
   encerrarSessao,
 };
