@@ -13,17 +13,6 @@ Relógio ──BLE──> ESP32-CAM ──HTTPS──> Backend (EC2) ──> RDS
 **Em produção:** `https://safeevidence.duckdns.org` (teste com `/health`).
 Base da API para o front e o Postman: `https://safeevidence.duckdns.org/api`.
 
-## Documentação
-
-| Arquivo | Pra quem | Conteúdo |
-| --- | --- | --- |
-| `docs/api-portal.md` | front (portal) | todas as rotas do portal, erros e exemplos |
-| `docs/contrato-ia.md` | serviço de IA | o que o backend manda e o que a IA devolve |
-| `docs/aws-setup.md` | infra | RDS e S3: acesso, tabelas, retenção, IAM, CT04/CT06 |
-| `docs/deploy-aws.md` | infra | publicar e atualizar o backend na EC2 com HTTPS |
-| `docs/postman/` | testes | coleção do Postman com o fluxo completo do portal |
-| `docs/testes-api.http` | testes | mesmos testes, pela extensão REST Client do VS Code |
-
 ## Setup
 
 Requer **Node.js 22** (o ffmpeg vem junto, pelo pacote `ffmpeg-static`).
@@ -233,6 +222,52 @@ npm run simular-camera -- --chave <DEVICE_KEY>
 ```
 
 Funciona contra o backend local ou o da nuvem (`--url https://...`).
+
+## Testes automáticos
+
+Os testes cobrem a parte do backend dos casos de teste do TCC (CT01 a CT11).
+Cada arquivo em `tests/` sobe um backend próprio, com um banco temporário
+(criado e apagado no fim) e o e-mail desligado. Nada é gravado no RDS, no S3
+ou no Gmail. A análise dos vídeos é feita pela **IA real** (YOLOv9).
+
+Antes de rodar:
+
+1. Postgres onde o usuário possa criar bancos. O mais simples é o do Docker
+   (`docker compose up -d`, Opção A acima).
+2. IA real rodando **no mesmo computador** (ela baixa o vídeo e devolve o
+   laudo em `127.0.0.1`). Na pasta `Projeto_YOLO_violencia`, com `IA_TOKEN` e
+   `IA_CALLBACK_TOKEN` iguais aos do `.env` do backend:
+
+   ```bash
+   uvicorn servico.app:app --host 127.0.0.1 --port 8090
+   ```
+
+Depois:
+
+```bash
+npm test
+```
+
+Os arquivos rodam um de cada vez (a IA analisa um vídeo por vez). Os testes
+leem `IA_SERVICE_URL`, `IA_TOKEN` e `IA_CALLBACK_TOKEN` do `.env`; para usar
+outros valores, defina `TESTE_IA_URL`, `TESTE_IA_TOKEN` e
+`TESTE_IA_CALLBACK_TOKEN`. Se a IA estiver lenta (CPU), aumente a espera com
+`TESTE_IA_TEMPO_MAXIMO_S` (padrão: 600).
+
+O CT03 usa um vídeo sintético de 5 s. Para medir com um vídeo de verdade
+(ex.: agressão encenada), informe o vídeo e o segundo em que a agressão
+acontece:
+
+```powershell
+$env:TESTE_VIDEO="C:\caminho\encenacao.mp4"; $env:TESTE_VIDEO_AGRESSAO_S="12"; node --test tests/ct03-tempo-ia.test.js
+```
+
+Para usar outro Postgres, defina antes `TESTE_DB_HOST`, `TESTE_DB_PORT`,
+`TESTE_DB_USER`, `TESTE_DB_PASSWORD` e, se ele exigir SSL (como o RDS),
+`TESTE_DB_SSL=true`.
+
+O que cada teste verifica e o que fica para teste manual (relógio, câmera e
+front) está em [docs/casos-de-teste.md](docs/casos-de-teste.md).
 
 ## Armazenamento (local ou AWS S3)
 

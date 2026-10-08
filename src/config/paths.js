@@ -1,7 +1,8 @@
 const path = require('path');
 const fs = require('fs');
 
-const RAIZ_TMP = path.join(__dirname, '..', '..', 'tmp');
+// PASTA_TMP permite isolar os arquivos (ex.: nos testes automáticos).
+const RAIZ_TMP = process.env.PASTA_TMP || path.join(__dirname, '..', '..', 'tmp');
 const FRAMES_DIR = path.join(RAIZ_TMP, 'frames');
 const VIDEOS_DIR = path.join(RAIZ_TMP, 'videos');
 

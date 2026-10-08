@@ -64,17 +64,13 @@ async function criarSessao(idVitima) {
   const { rows } = await db.query(
     `INSERT INTO sessao (id_vitima, expira_em)
      VALUES ($1, NOW() + ($2 * INTERVAL '1 hour'))
-     RETURNING id_sessao, expira_em`,
+     RETURNING id_sessao`,
     [idVitima, SESSAO_MAX_HORAS]
   );
-  const sessao = rows[0];
-  const token = assinarJwt({
-    sub: idVitima,
-    sid: sessao.id_sessao,
-    iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(new Date(sessao.expira_em).getTime() / 1000),
-  });
-  return { token, expira_em: sessao.expira_em, inatividade_minutos: INATIVIDADE_MIN };
+  const agoraS = Math.floor(Date.now() / 1000);
+  const expiraS = agoraS + SESSAO_MAX_HORAS * 3600;
+  const token = assinarJwt({ sub: idVitima, sid: rows[0].id_sessao, iat: agoraS, exp: expiraS });
+  return { token, expira_em: new Date(expiraS * 1000).toISOString(), inatividade_minutos: INATIVIDADE_MIN };
 }
 
 async function validarSessao(token) {
@@ -82,14 +78,15 @@ async function validarSessao(token) {
   if (!payload) return { erro: 'Token inválido ou expirado.', codigo: 'TOKEN_INVALIDO' };
 
   const { rows } = await db.query(
-    `SELECT id_vitima, encerrada_em, expira_em,
+    `SELECT id_vitima, encerrada_em,
+            expira_em < NOW() AS expirada,
             ultimo_acesso < NOW() - ($2 * INTERVAL '1 minute') AS inativa
        FROM sessao WHERE id_sessao = $1`,
     [payload.sid, INATIVIDADE_MIN]
   );
   const sessao = rows[0];
   if (!sessao || sessao.encerrada_em) return { erro: 'Sessão encerrada.', codigo: 'SESSAO_ENCERRADA' };
-  if (new Date(sessao.expira_em) < new Date()) return { erro: 'Sessão expirada.', codigo: 'SESSAO_EXPIRADA' };
+  if (sessao.expirada) return { erro: 'Sessão expirada.', codigo: 'SESSAO_EXPIRADA' };
   if (sessao.inativa) {
     await encerrarSessao(payload.sid);
     return { erro: `Sessão encerrada por inatividade (${INATIVIDADE_MIN} min).`, codigo: 'SESSAO_INATIVA' };
