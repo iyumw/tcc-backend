@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Backend do projeto Safe Evidence (TCC) — API de Serviço, custódia de evidências digitais e integração com o pipeline de Inteligência Artificial.",
   "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",

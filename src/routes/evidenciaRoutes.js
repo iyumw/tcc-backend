@@ -17,6 +17,7 @@ router.get('/:id/url', evidenciaController.gerarUrl);
 router.get('/:id/integridade', evidenciaController.verificarIntegridade);
 router.get('/:id/laudo', evidenciaController.baixarLaudo);
 router.get('/:id/laudo.pdf', evidenciaController.baixarLaudoPdf);
+router.get('/:id/carimbo.tsr', evidenciaController.baixarCarimbo);
 router.post('/:id/analise', evidenciaController.reprocessar);
 router.delete('/:id', evidenciaController.excluir);
 

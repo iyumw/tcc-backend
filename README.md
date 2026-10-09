@@ -106,9 +106,9 @@ requisição da câmera manda os cabeçalhos `X-Dispositivo-Id` e
 O `session_id` precisa começar com o id do próprio dispositivo
 (`esp32cam-01-...`), senão `403`: uma câmera não mexe nas sessões de outra.
 
-> `/api/evidencia/*` (sem o "s") é um endereço antigo da captura, mantido
-> como apelido de `/api/captura/*` (exige a mesma chave). O firmware atual
-> usa `/api/captura/*`.
+> O apelido antigo `/api/evidencia/*` (sem o "s") e a rota
+> `/sessao/abrir` foram removidos em 08/10/2026: o firmware usa só
+> `/api/captura/upload` e `/api/captura/sessao/encerrar`.
 
 ### Organização do código
 
@@ -116,7 +116,7 @@ Cada grupo de rotas tem um arquivo de rotas e um controller com o mesmo nome:
 
 | Rotas | Controller | Quem chama |
 | --- | --- | --- |
-| `capturaRoutes.js` → `/api/captura` | `capturaController.js` | ESP32-CAM (frames, início/fim da sessão) |
+| `capturaRoutes.js` → `/api/captura` | `capturaController.js` | ESP32-CAM (frames e fim da sessão) |
 | `iaRoutes.js` → `/api/ia` | `iaController.js` | serviço de IA (resultado da análise) |
 | `authRoutes.js` → `/api/auth` | `authController.js` | portal: cadastro, login, MFA, senha |
 | `perfilRoutes.js` → `/api/perfil` | `perfilController.js` | portal: dados da usuária |
@@ -124,19 +124,16 @@ Cada grupo de rotas tem um arquivo de rotas e um controller com o mesmo nome:
 
 A regra de negócio fica em `src/services/` (um arquivo por assunto:
 `storageService`, `pipelineIAService`, `authService`, `custodiaService`...).
+A parte da IA está dividida em `clienteIa` (HTTP com o serviço de IA),
+`validacaoResultadoIA` (callback), `laudoService` (laudo JSON/PDF) e
+`pipelineIAService` (fila de análise e reenvios).
 Validações e helpers usados em vários lugares (CPF, e-mail, senha, ids)
-ficam em `src/utils/`.
+ficam em `src/utils/`. Os controllers não têm `try/catch`: o
+`comTratamentoDeErros` repassa qualquer erro ao `tratadorDeErros`, que responde
+sempre `{ "erro": "...", "codigo": "..." }`.
 
 ### `GET /health`
 Health check simples.
-
-### `POST /api/captura/sessao/abrir`
-Abre uma nova sessão de captura para um dispositivo já cadastrado.
-(Endpoint auxiliar — no fluxo real com a ESP32-CAM, a sessão é aberta
-automaticamente no primeiro frame recebido, ver `/upload` abaixo.)
-
-**Body:** vazio. O dispositivo é o da chave; se mandar `id_dispositivo`,
-ele tem que ser o mesmo.
 
 ### `POST /api/captura/upload`
 Recebe UM frame JPEG da ESP32-CAM (chamado repetidamente durante a
@@ -149,6 +146,10 @@ precisam vir antes do `image`.
 Se for o primeiro frame de um `session_id` novo, a sessão é criada
 automaticamente na tabela `acionamento` (vinculada ao `device_id` —
 que precisa já existir na tabela `dispositivo`).
+
+Limites: só JPEG (`Content-Type: image/jpeg` e conteúdo começando com a
+assinatura de JPEG, senão `415`), até 2 MB por frame e 20.000 frames por
+sessão (`413`).
 
 **Resposta (201):**
 ```json
@@ -173,11 +174,18 @@ apagados. O resultado aparece no log do backend e em `GET /api/evidencias`.
 { "session_id": "esp32cam-01-123456", "status": "processando" }
 ```
 
-**Erros possíveis (abrir, upload e encerrar):**
+Encerrar de novo a mesma sessão não monta outro vídeo: enquanto a montagem
+anda, a resposta continua `202`; depois de pronta, é `200` com
+`"status": "concluida"` e o `id_gravacao`. Se o backend cair no meio da
+montagem, ela é retomada sozinha quando ele subir de novo.
+
+**Erros possíveis (upload e encerrar):**
 - `400` — campo obrigatório ausente, ou nenhum frame recebido pra sessão
 - `401` — sem chave do dispositivo, ou chave errada
 - `403` — `device_id` ou `session_id` de outro dispositivo
 - `404` — sessão não encontrada
+- `413` — frame grande demais ou sessão com frames demais
+- `415` — o arquivo não é JPEG
 - `500` — erro interno
 
 ### `GET /api/evidencias/:id/arquivo?expira=...&assinatura=...`
@@ -208,8 +216,17 @@ e no `.env`: `IA_SERVICE_URL=http://localhost:8090` e um
 
 O laudo em PDF ("Download de Segurança", `GET /api/evidencias/:id/laudo.pdf`)
 também é gerado pelo serviço de IA (`POST {IA_SERVICE_URL}/laudo`); a IA falsa
-devolve um PDF de teste. **Banco já existente:** rode a migração
-`006_laudo_ia.sql`.
+devolve um PDF de teste. **Banco já existente:** rode as migrações
+`006_laudo_ia.sql` e `007_finalizacao_idempotente.sql` (esta impede que
+encerrar a mesma sessão duas vezes gere duas gravações) e
+`008_carimbo_tempo.sql`.
+
+## Carimbo de tempo (RFC 3161)
+
+Cada vídeo montado recebe um carimbo de tempo de uma autoridade externa
+(FreeTSA, por padrão), que prova a data do hash sem depender do relógio do
+servidor. O arquivo `.tsr` sai em `GET /api/evidencias/:id/carimbo.tsr`.
+Configuração, API e como verificar com o `openssl`: `docs/carimbo-tempo.md`.
 
 ## Testando sem a câmera
 
@@ -290,7 +307,5 @@ cd ~/tcc-backend && bash deploy/atualizar.sh
 
 ## Próximos passos
 
-- Timestamp confiável RFC 3161 — hoje só grava `data_hora` do servidor
 - Guardar a chave da câmera cifrada na flash (eFuse / flash encryption) em vez de no firmware
 - Perfil de colaborador interno / ordem judicial (RN11 / CT05 completo)
-- Laudo em PDF (hoje o download é JSON com metadados de integridade)
