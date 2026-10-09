@@ -44,7 +44,7 @@ describe('CT08 - status da análise em tempo real (backend)', () => {
   });
   after(() => ambiente?.encerrar());
 
-  it('envia Processando e Concluido pela conexão aberta, até 5 s depois de concluir', async (t) => {
+  it('envia Processando e Concluido pela conexão aberta, até 5 s depois de concluir', async (contexto) => {
     const conexao = new AbortController();
     const fluxo = await fetch(`${ambiente.api}/evidencias/eventos?token=${token}`, { signal: conexao.signal });
     assert.equal(fluxo.status, 200);
@@ -67,7 +67,7 @@ describe('CT08 - status da análise em tempo real (backend)', () => {
 
     const atrasoMs = Number(rows[0].atraso_ms);
     assert.ok(atrasoMs <= ATRASO_MAXIMO_MS, `evento chegou ${atrasoMs} ms depois da conclusão`);
-    t.diagnostic(`eventos: ${status.join(' -> ')}; Concluido chegou ${atrasoMs.toFixed(0)} ms depois da conclusão`);
+    contexto.diagnostic(`eventos: ${status.join(' -> ')}; Concluido chegou ${atrasoMs.toFixed(0)} ms depois da conclusão`);
   });
 
   it('a conexão de eventos exige login', async () => {

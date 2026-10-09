@@ -10,6 +10,7 @@ const os = require('node:os');
 const path = require('node:path');
 const dotenv = require('dotenv');
 const { Client } = require('pg');
+const { iniciarTsaFalsa } = require('./tsaFalsa');
 
 const RAIZ = path.join(__dirname, '..', '..');
 const SCRIPTS_DO_BANCO = [
@@ -19,6 +20,8 @@ const SCRIPTS_DO_BANCO = [
   'migrations/004_renomear_codigo_mfa.sql',
   'migrations/005_chave_dispositivo.sql',
   'migrations/006_laudo_ia.sql',
+  'migrations/007_finalizacao_idempotente.sql',
+  'migrations/008_carimbo_tempo.sql',
 ];
 const TEMPO_MAXIMO_SUBIDA_MS = 15000;
 
@@ -132,6 +135,7 @@ async function iniciarAmbiente(variaveisExtras = {}) {
   const urlBase = `http://127.0.0.1:${portaBackend}`;
 
   const banco = await criarBanco(nomeBanco);
+  const tsa = await iniciarTsaFalsa();
 
   // Todas as variáveis lidas pelo backend são definidas aqui: assim o dotenv
   // não completa nada com o .env de verdade (RDS, S3, Gmail).
@@ -168,6 +172,7 @@ async function iniciarAmbiente(variaveisExtras = {}) {
     IA_CALLBACK_TOKEN: ia.tokenCallback,
     IA_MAX_TENTATIVAS: '5',
     IA_TIMEOUT_MINUTOS: '30',
+    TSA_URL: tsa.url,
     ...variaveisExtras,
   };
 
@@ -177,6 +182,7 @@ async function iniciarAmbiente(variaveisExtras = {}) {
 
   async function encerrar() {
     backend.kill();
+    await tsa.encerrar();
     await banco.end();
     await esperar(300);
     await comAdmin((cliente) => cliente.query(`DROP DATABASE IF EXISTS ${nomeBanco} WITH (FORCE)`));
@@ -188,6 +194,7 @@ async function iniciarAmbiente(variaveisExtras = {}) {
     urlBase,
     env,
     banco,
+    tsa,
     pastaTmp,
     versaoDoModelo,
     textoDoLog: () => log.join(''),

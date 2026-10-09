@@ -38,9 +38,9 @@ describe('CT03 - tempo de resposta da IA real', () => {
     assert.ok(laudo, 'o detalhe deveria trazer o laudo da IA');
   });
 
-  it('disponibiliza o laudo dentro do prazo da RN16 (50% da duração)', (t) => {
+  it('disponibiliza o laudo dentro do prazo da RN16 (50% da duração)', (contexto) => {
     const prazoMs = laudo.duracao_video_segundos * 1000 * 0.5;
-    t.diagnostic(`vídeo de ${laudo.duracao_video_segundos} s: análise em ${laudo.tempo_processamento_ms} ms (prazo ${prazoMs} ms)`);
+    contexto.diagnostic(`vídeo de ${laudo.duracao_video_segundos} s: análise em ${laudo.tempo_processamento_ms} ms (prazo ${prazoMs} ms)`);
     assert.ok(laudo.tempo_processamento_ms <= prazoMs, `${laudo.tempo_processamento_ms} ms > prazo de ${prazoMs} ms`);
     assert.equal(laudo.dentro_do_prazo_rn16, true);
   });
@@ -58,9 +58,9 @@ describe('CT03 - tempo de resposta da IA real', () => {
   it(
     'marca um trecho crítico perto do momento da agressão encenada (±5 s)',
     { skip: !caminhoDoVideo || Number.isNaN(momentoDaAgressaoS) ? 'defina TESTE_VIDEO e TESTE_VIDEO_AGRESSAO_S' : false },
-    (t) => {
+    (contexto) => {
       const trechos = laudo.segmentos_criticos.map((trecho) => `${trecho.inicio_s}-${trecho.fim_s} s`);
-      t.diagnostic(`trechos críticos: ${trechos.join(', ') || 'nenhum'}`);
+      contexto.diagnostic(`trechos críticos: ${trechos.join(', ') || 'nenhum'}`);
       const encontrouOMomento = laudo.segmentos_criticos.some(
         (trecho) =>
           trecho.inicio_s - TOLERANCIA_DA_MARCACAO_S <= momentoDaAgressaoS &&

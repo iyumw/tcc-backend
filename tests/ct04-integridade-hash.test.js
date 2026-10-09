@@ -39,7 +39,7 @@ describe('CT04 - integridade da prova via hash SHA-256', () => {
     assert.equal(dados.hash_calculado, dados.hash_esperado);
   });
 
-  it('detecta 1 byte alterado, mostra hash esperado x calculado, em até 500 ms', async (t) => {
+  it('detecta 1 byte alterado, mostra hash esperado x calculado, em até 500 ms', async (contexto) => {
     const video = fs.readFileSync(caminhoDoVideo);
     const byteOriginal = video[POSICAO_ADULTERADA];
     video[POSICAO_ADULTERADA] = byteOriginal ^ 0xff;
@@ -52,7 +52,7 @@ describe('CT04 - integridade da prova via hash SHA-256', () => {
     assert.equal(dados.id_gravacao, gravacao.id_gravacao);
     assert.notEqual(dados.hash_calculado, dados.hash_esperado);
     assert.ok(tempoMs < TEMPO_MAXIMO_VERIFICACAO_MS, `resposta levou ${tempoMs.toFixed(0)} ms`);
-    t.diagnostic(`adulteração detectada em ${tempoMs.toFixed(1)} ms (hash: ${dados.tempo_verificacao_ms} ms)`);
+    contexto.diagnostic(`adulteração detectada em ${tempoMs.toFixed(1)} ms (hash: ${dados.tempo_verificacao_ms} ms)`);
 
     video[POSICAO_ADULTERADA] = byteOriginal;
     fs.writeFileSync(caminhoDoVideo, video);

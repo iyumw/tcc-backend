@@ -11,7 +11,7 @@ const REPETICOES = 15;
 const BYTES_POR_MB = 1024 * 1024;
 
 function mediana(valores) {
-  const ordenados = [...valores].sort((a, b) => a - b);
+  const ordenados = [...valores].sort((menor, maior) => menor - maior);
   return ordenados[Math.floor(ordenados.length / 2)];
 }
 
