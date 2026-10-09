@@ -8,7 +8,6 @@ const router = express.Router();
 // Antes do upload, para nenhum arquivo ser gravado sem a chave do dispositivo.
 router.use(autenticarDispositivo);
 
-router.post('/sessao/abrir', capturaController.abrirSessao);
 router.post('/upload', uploadFrame.single('image'), capturaController.receberFrame);
 router.post('/sessao/encerrar', capturaController.encerrarSessao);
 

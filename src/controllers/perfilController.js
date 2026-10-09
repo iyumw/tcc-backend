@@ -3,6 +3,7 @@ const authService = require('../services/authService');
 const auditoria = require('../services/auditoriaService');
 const evidencias = require('../services/evidenciaService');
 const validacao = require('../utils/validacao');
+const { envolverControladores } = require('../utils/comTratamentoDeErros');
 
 const CAMPOS_PERFIL = `id_vitima, nome, cpf, email, telefone, cep, logradouro, numero, complemento,
                        bairro, cidade, uf, consentimento_em, criada_em`;
@@ -41,28 +42,20 @@ async function carregarPerfil(idVitima) {
   return formatarPerfil(rows[0], dispositivo.rows[0]);
 }
 
-async function obter(req, res, next) {
-  try {
-    const perfil = await carregarPerfil(req.usuario.idVitima);
-    if (!perfil) return res.status(404).json({ erro: 'Conta não encontrada.' });
-    return res.json(perfil);
-  } catch (erro) {
-    next(erro);
-  }
+async function obter(req, res) {
+  const perfil = await carregarPerfil(req.usuario.idVitima);
+  if (!perfil) return res.status(404).json({ erro: 'Conta não encontrada.' });
+  return res.json(perfil);
 }
 
-async function enviarCodigo(req, res, next) {
-  try {
-    const finalidade = req.body && req.body.finalidade;
-    if (!FINALIDADES_DE_CODIGO.includes(finalidade)) {
-      return res.status(400).json({ erro: '"finalidade" deve ser "alterar_dados" ou "excluir_conta".' });
-    }
-    const { rows } = await db.query('SELECT email FROM vitima WHERE id_vitima = $1', [req.usuario.idVitima]);
-    const { validadeMinutos } = await authService.enviarCodigo(req.usuario.idVitima, rows[0].email, finalidade);
-    return res.json({ mensagem: 'Enviamos um código para o seu e-mail.', validade_minutos: validadeMinutos });
-  } catch (erro) {
-    next(erro);
+async function enviarCodigo(req, res) {
+  const finalidade = req.body && req.body.finalidade;
+  if (!FINALIDADES_DE_CODIGO.includes(finalidade)) {
+    return res.status(400).json({ erro: '"finalidade" deve ser "alterar_dados" ou "excluir_conta".' });
   }
+  const { rows } = await db.query('SELECT email FROM vitima WHERE id_vitima = $1', [req.usuario.idVitima]);
+  const { validadeMinutos } = await authService.enviarCodigo(req.usuario.idVitima, rows[0].email, finalidade);
+  return res.json({ mensagem: 'Enviamos um código para o seu e-mail.', validade_minutos: validadeMinutos });
 }
 
 function alteracoesDeEndereco(endereco, alterar, invalidos) {
@@ -114,6 +107,11 @@ async function lerAlteracoes(corpo) {
   return { colunas, invalidos };
 }
 
+async function emailEmUsoPorOutraConta(email, idVitima) {
+  const { rows } = await db.query('SELECT 1 FROM vitima WHERE email = $1 AND id_vitima <> $2', [email, idVitima]);
+  return rows.length > 0;
+}
+
 function exigeCodigo(corpo) {
   return corpo.email !== undefined || corpo.telefone !== undefined || corpo.nova_senha !== undefined;
 }
@@ -123,120 +121,108 @@ function camposAlteradosParaAuditoria(corpo) {
   return corpo.nova_senha !== undefined ? [...campos, 'senha'] : campos;
 }
 
-async function atualizar(req, res, next) {
-  try {
-    const corpo = req.body || {};
-    const idVitima = req.usuario.idVitima;
+async function atualizar(req, res) {
+  const corpo = req.body || {};
+  const idVitima = req.usuario.idVitima;
 
-    const { colunas, invalidos } = await lerAlteracoes(corpo);
-    if (Object.keys(invalidos).length) return res.status(400).json({ erro: 'Verifique os campos.', campos: invalidos });
-    if (!Object.keys(colunas).length) return res.status(400).json({ erro: 'Nada para alterar.' });
+  const { colunas, invalidos } = await lerAlteracoes(corpo);
+  if (Object.keys(invalidos).length) return res.status(400).json({ erro: 'Verifique os campos.', campos: invalidos });
+  if (!Object.keys(colunas).length) return res.status(400).json({ erro: 'Nada para alterar.' });
 
-    if (exigeCodigo(corpo)) {
-      const resultado = await authService.conferirCodigo({ idVitima, finalidade: 'alterar_dados', codigo: corpo.codigo });
-      if (!resultado.ok) {
-        return res.status(401).json({
-          erro: `Alterar e-mail, telefone ou senha exige o código enviado por e-mail. ${resultado.erro}`,
-          codigo: 'MFA_OBRIGATORIO',
-        });
-      }
-    }
-
-    if (colunas.email) {
-      const duplicado = await db.query('SELECT 1 FROM vitima WHERE email = $1 AND id_vitima <> $2', [colunas.email, idVitima]);
-      if (duplicado.rows.length) {
-        return res.status(409).json({ erro: 'E-mail já cadastrado.', campos: { email: 'E-mail já cadastrado.' } });
-      }
-    }
-
-    const nomes = Object.keys(colunas);
-    const atribuicoes = nomes.map((coluna, i) => `${coluna} = $${i + 2}`).join(', ');
-    await db.query(`UPDATE vitima SET ${atribuicoes} WHERE id_vitima = $1`, [idVitima, ...Object.values(colunas)]);
-
-    if (colunas.senha_hash) await authService.encerrarTodasSessoes(idVitima, req.usuario.idSessao);
-
-    await auditoria.registrar('perfil_alterado', {
-      idVitima,
-      detalhes: { campos: camposAlteradosParaAuditoria(corpo) },
-      req,
-    });
-
-    return res.json(await carregarPerfil(idVitima));
-  } catch (erro) {
-    next(erro);
+  // A duplicidade é conferida antes do código, para um 409 não gastar o código da usuária.
+  if (colunas.email && (await emailEmUsoPorOutraConta(colunas.email, idVitima))) {
+    return res.status(409).json({ erro: 'E-mail já cadastrado.', campos: { email: 'E-mail já cadastrado.' } });
   }
-}
 
-async function vincularDispositivo(req, res, next) {
-  try {
-    const idVitima = req.usuario.idVitima;
-    const idDispositivo = validacao.texto(req.body && req.body.id_dispositivo);
-    if (!idDispositivo) return res.status(400).json({ erro: '"id_dispositivo" é obrigatório.' });
-
-    const vinculoAtual = await db.query('SELECT id_dispositivo FROM dispositivo WHERE id_vitima = $1', [idVitima]);
-    if (vinculoAtual.rows.length) {
-      return res.status(409).json({ erro: `Sua conta já está vinculada ao dispositivo ${vinculoAtual.rows[0].id_dispositivo}.` });
-    }
-
-    const { rowCount } = await db.query(
-      'UPDATE dispositivo SET id_vitima = $2 WHERE id_dispositivo = $1 AND id_vitima IS NULL',
-      [idDispositivo, idVitima]
-    );
-    if (!rowCount) return res.status(404).json({ erro: 'Dispositivo não encontrado ou já vinculado a outra conta.' });
-
-    await auditoria.registrar('dispositivo_vinculado', { idVitima, detalhes: { id_dispositivo: idDispositivo }, req });
-    return res.json(await carregarPerfil(idVitima));
-  } catch (erro) {
-    next(erro);
-  }
-}
-
-async function excluirConta(req, res, next) {
-  try {
-    const idVitima = req.usuario.idVitima;
-    const resultado = await authService.conferirCodigo({
-      idVitima,
-      finalidade: 'excluir_conta',
-      codigo: req.body && req.body.codigo,
-    });
-    if (!resultado.ok) return res.status(401).json({ erro: resultado.erro, codigo: 'MFA_OBRIGATORIO' });
-
-    const { rows: gravacoes } = await db.query(
-      `SELECT g.id_gravacao, g.url_storage, g.processo_judicial
-         FROM gravacao g JOIN acionamento a ON a.id_acionamento = g.id_acionamento
-        WHERE a.id_vitima = $1`,
-      [idVitima]
-    );
-    const vinculadas = gravacoes.filter((gravacao) => gravacao.processo_judicial);
-    if (vinculadas.length) {
-      return res.status(409).json({
-        erro: 'A conta tem evidências vinculadas a processo judicial ativo e não pode ser excluída agora.',
-        gravacoes_vinculadas: vinculadas.map((gravacao) => gravacao.id_gravacao),
+  if (exigeCodigo(corpo)) {
+    const resultado = await authService.conferirCodigo({ idVitima, finalidade: 'alterar_dados', codigo: corpo.codigo });
+    if (!resultado.ok) {
+      return res.status(401).json({
+        erro: `Alterar e-mail, telefone ou senha exige o código enviado por e-mail. ${resultado.erro}`,
+        codigo: 'MFA_OBRIGATORIO',
       });
     }
-
-    await db.query('DELETE FROM vitima WHERE id_vitima = $1', [idVitima]);
-    const falhas = await evidencias.apagarArquivos(gravacoes.map((gravacao) => gravacao.url_storage));
-
-    await auditoria.registrar('conta_excluida', {
-      idVitima,
-      detalhes: { gravacoes_excluidas: gravacoes.length, arquivos_nao_apagados: falhas },
-      req,
-    });
-    if (falhas.length) {
-      console.warn(`[Perfil] Conta ${idVitima} excluída, mas ${falhas.length} arquivo(s) não foram apagados:`, falhas);
-    }
-
-    return res.status(204).end();
-  } catch (erro) {
-    next(erro);
   }
+
+  const nomes = Object.keys(colunas);
+  const atribuicoes = nomes.map((coluna, i) => `${coluna} = $${i + 2}`).join(', ');
+  await db.query(`UPDATE vitima SET ${atribuicoes} WHERE id_vitima = $1`, [idVitima, ...Object.values(colunas)]);
+
+  // Trocar a senha ou o e-mail de login derruba as outras sessões abertas.
+  if (colunas.senha_hash || colunas.email) await authService.encerrarTodasSessoes(idVitima, req.usuario.idSessao);
+
+  await auditoria.registrar('perfil_alterado', {
+    idVitima,
+    detalhes: { campos: camposAlteradosParaAuditoria(corpo) },
+    req,
+  });
+
+  return res.json(await carregarPerfil(idVitima));
 }
 
-module.exports = {
+async function vincularDispositivo(req, res) {
+  const idVitima = req.usuario.idVitima;
+  const idDispositivo = validacao.texto(req.body && req.body.id_dispositivo);
+  if (!idDispositivo) return res.status(400).json({ erro: '"id_dispositivo" é obrigatório.' });
+
+  const vinculoAtual = await db.query('SELECT id_dispositivo FROM dispositivo WHERE id_vitima = $1', [idVitima]);
+  if (vinculoAtual.rows.length) {
+    return res.status(409).json({ erro: `Sua conta já está vinculada ao dispositivo ${vinculoAtual.rows[0].id_dispositivo}.` });
+  }
+
+  const { rowCount } = await db.query(
+    'UPDATE dispositivo SET id_vitima = $2 WHERE id_dispositivo = $1 AND id_vitima IS NULL',
+    [idDispositivo, idVitima]
+  );
+  if (!rowCount) return res.status(404).json({ erro: 'Dispositivo não encontrado ou já vinculado a outra conta.' });
+
+  await auditoria.registrar('dispositivo_vinculado', { idVitima, detalhes: { id_dispositivo: idDispositivo }, req });
+  return res.json(await carregarPerfil(idVitima));
+}
+
+async function excluirConta(req, res) {
+  const idVitima = req.usuario.idVitima;
+  const resultado = await authService.conferirCodigo({
+    idVitima,
+    finalidade: 'excluir_conta',
+    codigo: req.body && req.body.codigo,
+  });
+  if (!resultado.ok) return res.status(401).json({ erro: resultado.erro, codigo: 'MFA_OBRIGATORIO' });
+
+  const { rows: gravacoes } = await db.query(
+    `SELECT g.id_gravacao, g.url_storage, g.processo_judicial
+       FROM gravacao g JOIN acionamento a ON a.id_acionamento = g.id_acionamento
+      WHERE a.id_vitima = $1`,
+    [idVitima]
+  );
+  const vinculadas = gravacoes.filter((gravacao) => gravacao.processo_judicial);
+  if (vinculadas.length) {
+    return res.status(409).json({
+      erro: 'A conta tem evidências vinculadas a processo judicial ativo e não pode ser excluída agora.',
+      gravacoes_vinculadas: vinculadas.map((gravacao) => gravacao.id_gravacao),
+    });
+  }
+
+  // O log e a exclusão entram juntos: ou os dois acontecem, ou nenhum.
+  await db.emTransacao(async (cliente) => {
+    await auditoria.registrarObrigatorio('conta_excluida', {
+      idVitima,
+      detalhes: { gravacoes_excluidas: gravacoes.map((gravacao) => gravacao.id_gravacao) },
+      req,
+      cliente,
+    });
+    await cliente.query('DELETE FROM vitima WHERE id_vitima = $1', [idVitima]);
+  });
+
+  await evidencias.apagarArquivosERegistrarFalhas(gravacoes.map((gravacao) => gravacao.url_storage), { idVitima, req });
+
+  return res.status(204).end();
+}
+
+module.exports = envolverControladores({
   obter,
   enviarCodigo,
   atualizar,
   vincularDispositivo,
   excluirConta,
-};
+});
