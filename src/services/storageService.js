@@ -1,6 +1,7 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const { PassThrough } = require('stream');
+const { lerSegredo } = require('../config/segredos');
 
 // Vídeos no AWS S3 quando S3_BUCKET está definido; senão, em tmp/videos/ (modo local).
 const S3_BUCKET = process.env.S3_BUCKET || '';
@@ -12,13 +13,8 @@ const S3 = MODO_S3 ? require('@aws-sdk/client-s3') : null;
 const { getSignedUrl } = MODO_S3 ? require('@aws-sdk/s3-request-presigner') : {};
 const s3 = MODO_S3 ? new S3.S3Client({ region: process.env.AWS_REGION }) : null;
 
-const segredoLocal = process.env.URL_SIGNING_SECRET || crypto.randomBytes(32).toString('hex');
-if (!MODO_S3 && !process.env.URL_SIGNING_SECRET) {
-  console.warn(
-    '[StorageService] URL_SIGNING_SECRET não definido — usando um segredo ' +
-      'aleatório. URLs geradas deixam de valer quando o servidor reinicia.'
-  );
-}
+// No modo S3 quem assina os links é a AWS; o segredo local só é exigido sem bucket.
+const segredoLocal = lerSegredo('URL_SIGNING_SECRET', { obrigatorio: !MODO_S3 });
 
 function assinarLocal(idGravacao, expiraEm) {
   return crypto.createHmac('sha256', segredoLocal).update(`${idGravacao}:${expiraEm}`).digest('hex');
@@ -46,7 +42,7 @@ async function salvarVideo(caminhoLocal, nomeObjeto, { sha256, sessionId }) {
       Bucket: S3_BUCKET,
       Key: chave,
       Body: fs.createReadStream(caminhoLocal),
-      ContentLength: fs.statSync(caminhoLocal).size,
+      ContentLength: (await fs.promises.stat(caminhoLocal)).size,
       ContentType: 'video/mp4',
       // Write once: falha se já existir um objeto com essa chave.
       IfNoneMatch: '*',
@@ -58,7 +54,7 @@ async function salvarVideo(caminhoLocal, nomeObjeto, { sha256, sessionId }) {
     })
   );
 
-  fs.rmSync(caminhoLocal, { force: true });
+  await fs.promises.rm(caminhoLocal, { force: true });
   return `s3://${S3_BUCKET}/${chave}`;
 }
 
@@ -77,7 +73,7 @@ function abrirLeitura(urlStorage) {
 }
 
 async function existe(urlStorage) {
-  if (!ehUrlS3(urlStorage)) return fs.existsSync(urlStorage);
+  if (!ehUrlS3(urlStorage)) return fs.promises.access(urlStorage).then(() => true, () => false);
   try {
     await s3.send(new S3.HeadObjectCommand({ Bucket: S3_BUCKET, Key: chaveDe(urlStorage) }));
     return true;
@@ -117,7 +113,7 @@ async function apagar(urlStorage) {
       // Com Object Lock (RN09), o S3 guarda a versão até o fim da retenção mesmo assim.
       await s3.send(new S3.DeleteObjectCommand({ Bucket: S3_BUCKET, Key: chaveDe(urlStorage) }));
     } else {
-      fs.rmSync(urlStorage, { force: true });
+      await fs.promises.rm(urlStorage, { force: true });
     }
     return { apagado: true };
   } catch (erro) {

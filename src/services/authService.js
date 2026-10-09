@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { promisify } = require('util');
 const db = require('../config/db');
 const emailService = require('./emailService');
+const { lerSegredo } = require('../config/segredos');
 
 const scrypt = promisify(crypto.scrypt);
 
@@ -9,12 +10,14 @@ const INATIVIDADE_MIN = Number(process.env.SESSAO_INATIVIDADE_MINUTOS) || 15;
 const SESSAO_MAX_HORAS = Number(process.env.SESSAO_MAX_HORAS) || 8;
 const MFA_VALIDADE_MIN = 5;
 const MFA_MAX_TENTATIVAS = 5;
+// Pedir um código novo zera as tentativas do código, mas não as da conta:
+// sem este teto, os 10^6 códigos poderiam ser testados pedindo códigos sem parar.
+const MFA_MAX_FALHAS_POR_CONTA = 10;
+const MFA_JANELA_FALHAS_MIN = 15;
 
-let JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-  JWT_SECRET = crypto.randomBytes(32).toString('hex');
-  console.warn('[AuthService] JWT_SECRET não definido — usando um aleatório (todas as sessões caem ao reiniciar).');
-}
+const JWT_SECRET = lerSegredo('JWT_SECRET');
+const CABECALHO_JWT = { alg: 'HS256', typ: 'JWT' };
+const CABECALHO_JWT_CODIFICADO = Buffer.from(JSON.stringify(CABECALHO_JWT)).toString('base64url');
 
 async function gerarHashSenha(senha) {
   const salt = crypto.randomBytes(16);
@@ -39,25 +42,48 @@ function assinarHmac(conteudo) {
 }
 
 function assinarJwt(payload) {
-  const cabecalho = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const corpo = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const assinatura = assinarHmac(`${cabecalho}.${corpo}`).toString('base64url');
-  return `${cabecalho}.${corpo}.${assinatura}`;
+  const assinatura = assinarHmac(`${CABECALHO_JWT_CODIFICADO}.${corpo}`).toString('base64url');
+  return `${CABECALHO_JWT_CODIFICADO}.${corpo}.${assinatura}`;
+}
+
+function lerJson(base64url) {
+  try {
+    return JSON.parse(Buffer.from(base64url, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+// Só aceita o cabeçalho que o próprio backend emite (HS256): impede trocar o
+// algoritmo no token (ex.: "none").
+function cabecalhoValido(cabecalho) {
+  const lido = lerJson(cabecalho);
+  return Boolean(lido) && lido.alg === CABECALHO_JWT.alg && lido.typ === CABECALHO_JWT.typ;
+}
+
+function payloadValido(payload) {
+  const agoraS = Date.now() / 1000;
+  return (
+    Boolean(payload) &&
+    Number.isInteger(payload.sub) &&
+    typeof payload.sid === 'string' &&
+    Number.isFinite(payload.exp) &&
+    payload.exp >= agoraS &&
+    (payload.iat === undefined || payload.iat <= agoraS + 60)
+  );
 }
 
 function lerJwt(token) {
   const partes = String(token || '').split('.');
   if (partes.length !== 3) return null;
   const [cabecalho, corpo, assinatura] = partes;
+  if (!cabecalhoValido(cabecalho)) return null;
   const esperada = assinarHmac(`${cabecalho}.${corpo}`);
   const recebida = Buffer.from(assinatura, 'base64url');
   if (esperada.length !== recebida.length || !crypto.timingSafeEqual(esperada, recebida)) return null;
-  try {
-    const payload = JSON.parse(Buffer.from(corpo, 'base64url').toString('utf8'));
-    return payload.exp && payload.exp * 1000 >= Date.now() ? payload : null;
-  } catch {
-    return null;
-  }
+  const payload = lerJson(corpo);
+  return payloadValido(payload) ? payload : null;
 }
 
 async function criarSessao(idVitima) {
@@ -151,10 +177,50 @@ async function enviarCodigo(idVitima, email, finalidade) {
   return { idCodigo, validadeMinutos };
 }
 
+async function falhasRecentesDaConta(idVitima, finalidade) {
+  const { rows } = await db.query(
+    `SELECT COALESCE(SUM(tentativas), 0)::int AS falhas
+       FROM codigo_mfa
+      WHERE id_vitima = $1 AND finalidade = $2
+        AND criado_em > NOW() - ($3 * INTERVAL '1 minute')`,
+    [idVitima, finalidade, MFA_JANELA_FALHAS_MIN]
+  );
+  return rows[0].falhas;
+}
+
+// Reserva a tentativa antes de comparar: requisições simultâneas não passam do limite.
+async function reservarTentativa(idCodigo) {
+  const { rows } = await db.query(
+    `UPDATE codigo_mfa SET tentativas = tentativas + 1
+      WHERE id_codigo = $1 AND usado_em IS NULL AND expira_em > NOW() AND tentativas < $2
+      RETURNING tentativas`,
+    [idCodigo, MFA_MAX_TENTATIVAS]
+  );
+  return rows.length ? rows[0].tentativas : null;
+}
+
+// Só uma requisição consegue marcar o código como usado. A tentativa certa é
+// devolvida, para "tentativas" contar só as erradas.
+async function consumirCodigo(idCodigo) {
+  const { rowCount } = await db.query(
+    'UPDATE codigo_mfa SET usado_em = NOW(), tentativas = tentativas - 1 WHERE id_codigo = $1 AND usado_em IS NULL',
+    [idCodigo]
+  );
+  return rowCount === 1;
+}
+
+function codigoConfere(registro, codigo) {
+  const recebido = Buffer.from(hashCodigo(registro.id_codigo, String(codigo || '').trim()));
+  const esperado = Buffer.from(registro.codigo_hash);
+  return recebido.length === esperado.length && crypto.timingSafeEqual(recebido, esperado);
+}
+
+const CODIGO_INVALIDO = { ok: false, erro: 'Código inválido. Peça um novo código.' };
+
 // Busca pelo id do código (login) ou pelo último código da usuária para a finalidade.
 async function conferirCodigo({ idCodigo = null, idVitima = null, finalidade, codigo }) {
   const { rows } = await db.query(
-    `SELECT id_codigo, id_vitima, codigo_hash, tentativas, usado_em, expira_em < NOW() AS expirado
+    `SELECT id_codigo, id_vitima, codigo_hash, usado_em, expira_em < NOW() AS expirado
        FROM codigo_mfa
       WHERE finalidade = $1
         AND ($2::uuid IS NULL OR id_codigo = $2::uuid)
@@ -164,20 +230,22 @@ async function conferirCodigo({ idCodigo = null, idVitima = null, finalidade, co
     [finalidade, idCodigo, idVitima]
   );
   const registro = rows[0];
-  if (!registro || registro.usado_em) return { ok: false, erro: 'Código inválido. Peça um novo código.' };
+  if (!registro || registro.usado_em) return CODIGO_INVALIDO;
   if (registro.expirado) return { ok: false, erro: 'Código expirado. Peça um novo código.' };
-  if (registro.tentativas >= MFA_MAX_TENTATIVAS) return { ok: false, erro: 'Muitas tentativas. Peça um novo código.' };
+  if ((await falhasRecentesDaConta(registro.id_vitima, finalidade)) >= MFA_MAX_FALHAS_POR_CONTA) {
+    return { ok: false, erro: `Muitas tentativas. Aguarde ${MFA_JANELA_FALHAS_MIN} min e peça um novo código.` };
+  }
 
-  const recebido = Buffer.from(hashCodigo(registro.id_codigo, String(codigo || '').trim()));
-  const esperado = Buffer.from(registro.codigo_hash);
-  if (!crypto.timingSafeEqual(recebido, esperado)) {
-    await db.query('UPDATE codigo_mfa SET tentativas = tentativas + 1 WHERE id_codigo = $1', [registro.id_codigo]);
-    const restantes = MFA_MAX_TENTATIVAS - registro.tentativas - 1;
+  const tentativas = await reservarTentativa(registro.id_codigo);
+  if (tentativas === null) return { ok: false, erro: 'Muitas tentativas. Peça um novo código.' };
+
+  if (!codigoConfere(registro, codigo)) {
+    const restantes = MFA_MAX_TENTATIVAS - tentativas;
     const dica = restantes > 0 ? `${restantes} tentativa(s) restante(s).` : 'Peça um novo código.';
     return { ok: false, erro: `Código incorreto. ${dica}` };
   }
 
-  await db.query('UPDATE codigo_mfa SET usado_em = NOW() WHERE id_codigo = $1', [registro.id_codigo]);
+  if (!(await consumirCodigo(registro.id_codigo))) return CODIGO_INVALIDO;
   return { ok: true, idVitima: registro.id_vitima };
 }
 

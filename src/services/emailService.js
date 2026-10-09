@@ -1,4 +1,5 @@
 const { erroHttp } = require('../utils/erros');
+const { EM_PRODUCAO } = require('../config/segredos');
 
 const SMTP_HOST = process.env.SMTP_HOST || '';
 const EMAIL_FROM = process.env.EMAIL_FROM || process.env.SMTP_USER || 'Safe Evidence <nao-responda@safe-evidence.local>';
@@ -23,9 +24,13 @@ function criarTransporte() {
 }
 
 const transporte = criarTransporte();
+if (!transporte && EM_PRODUCAO) {
+  console.error('[Email] SMTP_HOST não definido: os códigos de acesso não serão enviados.');
+}
 
 async function enviar(para, assunto, texto) {
   if (!transporte) {
+    if (EM_PRODUCAO) throw new Error('SMTP não configurado.');
     console.log(`[Email] (SMTP não configurado) Para: ${para} | ${assunto}\n${texto}`);
     return;
   }
@@ -33,8 +38,8 @@ async function enviar(para, assunto, texto) {
 }
 
 async function enviarCodigo(para, codigo, finalidade, validadeMinutos) {
-  // Sem SMTP, o código aparece no terminal para dar para testar sem e-mail.
-  if (!transporte) console.log(`[MFA] Código ${finalidade} para ${para}: ${codigo}`);
+  // Sem SMTP, o código vai para o terminal para testar sem e-mail (nunca em produção).
+  if (!transporte && !EM_PRODUCAO) console.log(`[MFA] Código ${finalidade} para ${para}: ${codigo}`);
 
   const texto =
     `Seu código de verificação é: ${codigo}\n\n` +
