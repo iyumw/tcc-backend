@@ -108,7 +108,7 @@ O `session_id` precisa começar com o id do próprio dispositivo
 
 > O apelido antigo `/api/evidencia/*` (sem o "s") e a rota
 > `/sessao/abrir` foram removidos em 08/10/2026: o firmware usa só
-> `/api/captura/upload` e `/api/captura/sessao/encerrar`.
+> `/api/captura/upload`, `/api/captura/upload-lote` e `/api/captura/sessao/encerrar`.
 
 ### Organização do código
 
@@ -156,6 +156,25 @@ sessão (`413`).
 { "recebido": true, "frame_index": 0 }
 ```
 
+### `POST /api/captura/upload-lote`
+Recebe VÁRIOS frames da mesma sessão numa requisição só (até 20). É o que o
+firmware usa: com a rede lenta, cada requisição a menos economiza uma ida e
+volta pela rede do celular. Multipart/form-data, campos: `device_id`,
+`session_id` e um ou mais `images` (arquivos). Cada arquivo se identifica
+pelo nome: `<frame_index>_<t_captura_ms>.jpg` (ou `<frame_index>.jpg`, sem
+o tempo, para frames antigos do cartão SD).
+
+O lote é tudo ou nada para erros de formato (nome fora do padrão, imagem
+grande demais, lote com mais de 20 arquivos): a resposta é 4xx e nenhum
+arquivo fica gravado. Um arquivo que não começa como JPEG é descartado
+sozinho e listado em `rejeitados`; os outros são aceitos. Reenviar o mesmo
+lote não duplica frames (os nomes iguais só sobrescrevem).
+
+**Resposta (201):**
+```json
+{ "recebidos": 9, "rejeitados": ["14_1400.jpg"] }
+```
+
 ### `POST /api/captura/sessao/encerrar`
 Chamado pela ESP32-CAM quando recebe o comando STOP do relógio.
 Responde na hora (`202`) e, em segundo plano, junta os frames daquela
@@ -180,12 +199,12 @@ anda, a resposta continua `202`; depois de pronta, é `200` com
 montagem, ela é retomada sozinha quando ele subir de novo.
 
 **Erros possíveis (upload e encerrar):**
-- `400` — campo obrigatório ausente, ou nenhum frame recebido pra sessão
+- `400` — campo obrigatório ausente, nenhum frame recebido pra sessão, nome de arquivo inválido ou lote com mais de 20 arquivos
 - `401` — sem chave do dispositivo, ou chave errada
 - `403` — `device_id` ou `session_id` de outro dispositivo
 - `404` — sessão não encontrada
 - `413` — frame grande demais ou sessão com frames demais
-- `415` — o arquivo não é JPEG
+- `415` — o arquivo não é JPEG (no lote: nenhum arquivo é JPEG)
 - `500` — erro interno
 
 ### `GET /api/evidencias/:id/arquivo?expira=...&assinatura=...`

@@ -16,8 +16,9 @@ const ASSINATURA_JPEG = Buffer.from([0xff, 0xd8, 0xff]);
 // junto com o processo, e pode ser refeita.
 const FINALIZACAO_TRAVADA_MIN = 15;
 
-async function descartarArquivoRecebido(req) {
-  if (req.file) await fs.rm(req.file.path, { force: true });
+async function descartarArquivosRecebidos(req) {
+  const arquivos = req.files || (req.file ? [req.file] : []);
+  await Promise.all(arquivos.map((arquivo) => fs.rm(arquivo.path, { force: true })));
 }
 
 async function comecaComoJpeg(caminho) {
@@ -44,28 +45,57 @@ async function criarSessaoSeNova(idDispositivo, sessionId) {
   );
 }
 
-function problemaNoFrame(req) {
+function problemaNaIdentificacao(req) {
   const { device_id: idDispositivo, session_id: sessionId } = req.body || {};
   if (!idDispositivo || !sessionId) return [400, 'Campos "device_id" e "session_id" são obrigatórios.'];
   if (idDispositivo !== req.dispositivo.id) return [403, 'device_id diferente do dispositivo autenticado.'];
-  if (!req.file) return [400, 'Campo "image" (arquivo) é obrigatório.'];
   return null;
+}
+
+function problemaNoFrame(req) {
+  return problemaNaIdentificacao(req) || (req.file ? null : [400, 'Campo "image" (arquivo) é obrigatório.']);
+}
+
+function problemaNoLote(req) {
+  return problemaNaIdentificacao(req) || (req.files?.length ? null : [400, 'Campo "images" (arquivos) é obrigatório.']);
+}
+
+async function recusar(req, res, [status, erro]) {
+  await descartarArquivosRecebidos(req);
+  return res.status(status).json({ erro });
 }
 
 async function receberFrame(req, res) {
   const problema = problemaNoFrame(req);
-  if (problema) {
-    await descartarArquivoRecebido(req);
-    const [status, erro] = problema;
-    return res.status(status).json({ erro });
-  }
+  if (problema) return recusar(req, res, problema);
   if (!(await comecaComoJpeg(req.file.path))) {
-    await descartarArquivoRecebido(req);
-    return res.status(415).json({ erro: 'O arquivo enviado não é um JPEG.' });
+    return recusar(req, res, [415, 'O arquivo enviado não é um JPEG.']);
   }
 
   await criarSessaoSeNova(req.dispositivo.id, req.body.session_id);
   return res.status(201).json({ recebido: true, frame_index: Number(req.body.frame_index) || 0 });
+}
+
+// Vários frames da mesma sessão numa requisição: a câmera paga a ida e volta pela
+// rede uma vez por lote. Um arquivo corrompido é descartado sem recusar os outros,
+// porque reenviar o lote não o consertaria.
+async function receberLote(req, res) {
+  const problema = problemaNoLote(req);
+  if (problema) return recusar(req, res, problema);
+
+  const rejeitados = [];
+  for (const arquivo of req.files) {
+    if (!(await comecaComoJpeg(arquivo.path))) {
+      await fs.rm(arquivo.path, { force: true });
+      rejeitados.push(arquivo.originalname);
+    }
+  }
+  if (rejeitados.length === req.files.length) {
+    return res.status(415).json({ erro: 'Nenhum arquivo do lote é um JPEG.' });
+  }
+
+  await criarSessaoSeNova(req.dispositivo.id, req.body.session_id);
+  return res.status(201).json({ recebidos: req.files.length - rejeitados.length, rejeitados });
 }
 
 async function situacaoDaSessao(sessionId, idDispositivo) {
@@ -181,6 +211,7 @@ async function retomarFinalizacoesInterrompidas() {
 
 module.exports = envolverControladores({
   receberFrame,
+  receberLote,
   encerrarSessao,
 });
 module.exports.retomarFinalizacoesInterrompidas = retomarFinalizacoesInterrompidas;

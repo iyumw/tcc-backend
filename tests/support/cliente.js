@@ -117,6 +117,19 @@ function criarCliente(ambiente) {
     });
   }
 
+  // Como o firmware: vários frames numa requisição, cada um nomeado "<indice>_<t_captura_ms>.jpg".
+  async function enviarLote(chave, sessionId, indices, { frames = framesPadrao() } = {}) {
+    const formulario = new FormData();
+    formulario.append('device_id', ID_CAMERA);
+    formulario.append('session_id', sessionId);
+    for (const indice of indices) {
+      const imagem = fs.readFileSync(frames.arquivos[indice % frames.arquivos.length]);
+      const nome = `${indice}_${Math.round(indice * frames.intervaloMs)}.jpg`;
+      formulario.append('images', new Blob([imagem], { type: 'image/jpeg' }), nome);
+    }
+    return requisicao('POST', '/captura/upload-lote', { formulario, cabecalhos: cabecalhosDaCamera(chave) });
+  }
+
   async function encerrarSessao(chave, sessionId) {
     return requisicao('POST', '/captura/sessao/encerrar', {
       corpo: { session_id: sessionId },
@@ -161,6 +174,7 @@ function criarCliente(ambiente) {
     cabecalhosDaCamera,
     formularioDeFrame,
     enviarFrame,
+    enviarLote,
     encerrarSessao,
     aguardarGravacao,
     gravarEvidencia,

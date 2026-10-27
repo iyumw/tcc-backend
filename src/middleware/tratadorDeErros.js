@@ -2,8 +2,8 @@ const multer = require('multer');
 
 const ERROS_DO_UPLOAD = {
   LIMIT_FILE_SIZE: [413, 'Imagem maior que o permitido.'],
-  LIMIT_FILE_COUNT: [400, 'Envie uma imagem por requisição.'],
-  LIMIT_UNEXPECTED_FILE: [400, 'Campo de arquivo inesperado (use "image").'],
+  LIMIT_FILE_COUNT: [400, 'Imagens demais nesta requisição.'],
+  LIMIT_UNEXPECTED_FILE: [400, 'Campo de arquivo inesperado (use "image" no /upload e "images" no /upload-lote).'],
 };
 
 // Converte erros conhecidos (JSON malformado, upload fora do limite) em
